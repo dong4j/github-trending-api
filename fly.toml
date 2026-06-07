@@ -66,9 +66,9 @@ primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
     protocol = "http"
 
 # 挂载卷 (可选, 用于将来缓存数据)
-# [[mounts]]
-#   source = "github_trending_data"
-#   destination = "/data"
+[[mounts]]
+  source = "github_trending_data"
+  destination = "/data"
 
 # 自动伸缩 (免费层不支持, 留作参考)
 # [scale]
