@@ -3,8 +3,8 @@
 # 文档: https://fly.io/docs/reference/configuration/
 # ===========================================
 
-# 应用名 (会生成 dong4j-github-trending-api.fly.dev 子域名)
-app = "dong4j-github-trending-api"
+# 应用名 (会生成 starcat-trending-api.fly.dev 子域名)
+app = "starcat-trending-api"
 primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
 
 # 构建配置
@@ -67,7 +67,7 @@ primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
 
 # 挂载卷 (可选, 用于将来缓存数据)
 [[mounts]]
-  source = "github_trending_data"
+  source = "starcat_trending_data"
   destination = "/data"
 
 # 自动伸缩 (免费层不支持, 留作参考)
