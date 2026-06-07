@@ -28,7 +28,7 @@ body:
       description: 触发 Bug 的具体步骤
       placeholder: |
         1. 启动服务 `go run ./cmd/server`
-        2. 执行 `curl http://localhost:8080/repo`
+        2. 执行 `curl http://localhost:5002/repo`
         3. 观察到返回空数组
     validations:
       required: true

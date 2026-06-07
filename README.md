@@ -82,10 +82,10 @@ docker build -t github-trending-api .
 # 运行
 make docker-run
 # 或
-docker run --rm -p 8080:8080 github-trending-api
+docker run --rm -p 5002:5002 github-trending-api
 ```
 
-服务器将在 `http://localhost:8080` 启动。
+服务器将在 `http://localhost:5002` 启动。
 
 ## 📚 API 接口
 
@@ -96,7 +96,7 @@ docker run --rm -p 8080:8080 github-trending-api
 欢迎信息
 
 ```bash
-curl http://localhost:8080/
+curl http://localhost:5002/
 ```
 
 响应:
@@ -109,7 +109,7 @@ curl http://localhost:8080/
 获取所有可用语言（约 814 种）
 
 ```bash
-curl http://localhost:8080/lang
+curl http://localhost:5002/lang
 ```
 
 响应:
@@ -132,10 +132,10 @@ curl http://localhost:8080/lang
 
 ```bash
 # 所有语言的每日 trending
-curl "http://localhost:8080/repo"
+curl "http://localhost:5002/repo"
 
 # Python 的每周 trending
-curl "http://localhost:8080/repo?lang=python&since=weekly"
+curl "http://localhost:5002/repo?lang=python&since=weekly"
 ```
 
 响应: (最多 25 条)
@@ -166,7 +166,7 @@ curl "http://localhost:8080/repo?lang=python&since=weekly"
 | sponsorable | string | 可选，`"1"` 表示仅显示有赞助选项的开发者             |
 
 ```bash
-curl "http://localhost:8080/user?lang=python&since=weekly"
+curl "http://localhost:5002/user?lang=python&since=weekly"
 ```
 
 响应: (最多 25 条)

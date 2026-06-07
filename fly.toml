@@ -15,7 +15,7 @@ primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
 # 环境变量
 [env]
   # 服务监听端口 (与 Dockerfile EXPOSE 一致)
-  PORT = "8080"
+  PORT = "5002"
   # Go 运行时调优 (256MB 内存友好)
   GOMAXPROCS = "1"
   GOGC = "100"
@@ -34,7 +34,7 @@ primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
 # 端口暴露
 [[services]]
   protocol = "tcp"
-  internal_port = 8080
+  internal_port = 5002
 
   # 进程级端口配置
   [[services.ports]]

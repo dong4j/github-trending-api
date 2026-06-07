@@ -104,7 +104,7 @@ docker-build: ## 构建 Docker 镜像
 
 .PHONY: docker-run
 docker-run: ## 运行 Docker 容器
-	@docker run --rm -p 8080:8080 github-trending-api:latest
+	@docker run --rm -p 5002:5002 github-trending-api:latest
 
 .PHONY: docker-clean
 docker-clean: ## 清理 Docker 镜像

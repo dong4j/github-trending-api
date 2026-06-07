@@ -69,7 +69,7 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "5002"
 	}
 
 	// 注册路由

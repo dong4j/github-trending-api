@@ -44,11 +44,11 @@ COPY --from=builder /app/bin/server /app/server
 USER app
 
 # 暴露端口
-EXPOSE 8080
+EXPOSE 5002
 
 # 健康检查 (可选)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:8080/ || exit 1
+    CMD wget --quiet --tries=1 --spider http://localhost:5002/ || exit 1
 
 # 启动服务
 ENTRYPOINT ["/app/server"]
