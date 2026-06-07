@@ -1,0 +1,41 @@
+# ===========================================
+# Render 部署配置 (Infrastructure as Code)
+# 文档: https://render.com/docs/blueprint-spec
+# 用途: 在 Render Dashboard "New Blueprint Instance" 时自动创建
+# ===========================================
+
+services:
+  - type: web
+    name: github-trending-api
+    runtime: docker
+    # 自动从仓库根目录构建 Dockerfile
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Plan 类型
+    # - "free"  : 免费, 但 15 分钟无请求会休眠, 冷启动 30-50s
+    # - "starter": $7/月, 不休眠
+    plan: free
+    # 实例配置
+    numInstances: 1
+    # 环境变量
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: GOMAXPROCS
+        value: "1"
+      - key: GOGC
+        value: "100"
+      - key: GO_ENV
+        value: "production"
+    # 健康检查
+    healthCheckPath: /
+    # 自动部署
+    autoDeploy: true
+    # 部署触发分支
+    branch: main
+    # 区域 (可选: oregon / frankfurt / singapore / ohio / virginia)
+    region: singapore
+    # 自定义域名 (可选, 在 Dashboard 单独配置)
+    # customDomains:
+    #   - domain: api.example.com
+    #     type: cname

@@ -1,0 +1,75 @@
+name: Go
+
+# ===========================================
+# 触发条件
+# ===========================================
+on:
+  # push 到 main / master 分支时触发
+  push:
+    branches: [main, master]
+  # 收到指向 main / master 的 PR 时触发
+  pull_request:
+    branches: [main, master]
+  # 支持手动触发 (Actions 页面)
+  workflow_dispatch:
+
+# ===========================================
+# 任务定义
+# ===========================================
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    # Go 版本矩阵
+    strategy:
+      matrix:
+        go-version: [1.21, 1.22]
+      # 任意一个版本失败则整体失败
+      fail-fast: false
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 安装 Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # 3. 验证依赖完整性
+      - name: Verify dependencies
+        run: go mod verify
+
+      # 4. 格式化检查 (gofmt)
+      - name: Check gofmt
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "gofmt found issues:"
+            gofmt -s -d .
+            exit 1
+          fi
+
+      # 5. 静态分析 (go vet)
+      - name: Run go vet
+        run: go vet ./...
+
+      # 6. 编译检查
+      - name: Build
+        run: go build -v ./...
+
+      # 7. 单元测试 (当前项目无测试,可后续扩展)
+      - name: Test
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      # 8. 上传覆盖率报告 (可选)
+      - name: Upload coverage
+        if: matrix.go-version == '1.22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7

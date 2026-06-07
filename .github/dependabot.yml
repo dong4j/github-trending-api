@@ -1,0 +1,47 @@
+# ===========================================
+# Dependabot 配置
+# 自动检查并提交依赖更新 PR
+# https://docs.github.com/en/code-security/dependabot
+# ===========================================
+version: 2
+
+updates:
+  # Go 模块依赖
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    # 自动分组,减少 PR 数量
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # 限制同时打开的 PR 数量
+    open-pull-requests-limit: 5
+    # PR 标签
+    labels:
+      - "dependencies"
+      - "go"
+    # 提交信息前缀
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps(dev)"
+      include: "scope"
+
+  # GitHub Actions 依赖
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"

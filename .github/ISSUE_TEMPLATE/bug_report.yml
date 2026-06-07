@@ -1,0 +1,76 @@
+name: Bug Report
+description: 报告一个 Bug
+title: "[Bug]: "
+labels: ["bug"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你提交 Bug 报告！在填写前请确认：
+        - 已在 [Issues](https://github.com/dong4j/github-trending-api/issues) 中搜索过类似问题
+        - 使用的是最新版本
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰简洁地描述 Bug
+      placeholder: |
+        调用 /repo 接口时返回了空数组，但 GitHub 网站上显示有数据
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 触发 Bug 的具体步骤
+      placeholder: |
+        1. 启动服务 `go run ./cmd/server`
+        2. 执行 `curl http://localhost:8080/repo`
+        3. 观察到返回空数组
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你期望发生什么
+      placeholder: 返回仓库列表
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么
+      placeholder: 返回了空数组 `[]`
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 运行环境
+      placeholder: |
+        - OS: macOS 14.5
+        - Go 版本: 1.21.6
+        - 部署方式: 本地
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 粘贴相关的错误日志或服务端输出
+      placeholder: |
+        ```
+        2024/01/01 12:00:00 fetch error: ...
+        ```
+    validations:
+      required: false
