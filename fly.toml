@@ -1,76 +1,48 @@
-# ===========================================
-# Fly.io 部署配置
-# 文档: https://fly.io/docs/reference/configuration/
-# ===========================================
+# fly.toml app configuration file generated for starcat-trending-api on 2026-06-08T00:32:15+08:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-# 应用名 (会生成 starcat-trending-api.fly.dev 子域名)
-app = "starcat-trending-api"
-primary_region = "nrt"  # 东京 (离中国/日本近, GitHub 访问快)
+app = 'starcat-trending-api'
+primary_region = 'nrt'
 
-# 构建配置
 [build]
-  # 自动检测 Dockerfile, 也可以指定
-  # dockerfile = "Dockerfile"
 
-# 环境变量
 [env]
-  # 服务监听端口 (与 Dockerfile EXPOSE 一致)
-  PORT = "5002"
-  # Go 运行时调优 (256MB 内存友好)
-  GOMAXPROCS = "1"
-  GOGC = "100"
+  GOGC = '100'
+  GOMAXPROCS = '1'
+  PORT = '5002'
 
-# 进程配置
 [processes]
-  app = "./server"  # Dockerfile 中编译的二进制文件名
+  app = './server'
 
-# VM 配置 (256MB 共享 CPU, 免费层)
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
-  cpu_kind = "shared"
-  cpus = 1
+[[mounts]]
+  source = 'starcat_trending_data'
+  destination = '/data'
 
-# 端口暴露
-[[services]]
-  protocol = "tcp"
+[http_service]
   internal_port = 5002
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
-  # 进程级端口配置
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
-    force_https = true
-
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-
-  # 健康检查 (使用 ROOT 路径)
-  [services.concurrency]
-    type = "connections"
+  [http_service.concurrency]
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
 
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "10s"
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/'
 
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
-    method = "get"
-    path = "/"
-    protocol = "http"
-
-# 挂载卷 (可选, 用于将来缓存数据)
-[[mounts]]
-  source = "starcat_trending_data"
-  destination = "/data"
-
-# 自动伸缩 (免费层不支持, 留作参考)
-# [scale]
-#   min_count = 1
-#   max_count = 3
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
