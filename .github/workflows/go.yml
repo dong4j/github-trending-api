@@ -22,9 +22,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # Go 版本矩阵
+    # 注意: 项目 go.mod 要求 go >= 1.25.0 (由 dependabot PR #6 拽高的),
+    # 矩阵不能放低于 1.25 的版本, 否则 GOTOOLCHAIN=local 会拒绝构建
     strategy:
       matrix:
-        go-version: [1.25, 1.24]
+        go-version: [1.25]
       # 任意一个版本失败则整体失败
       fail-fast: false
 
