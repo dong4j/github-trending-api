@@ -24,7 +24,7 @@ on:
 # - ENTRY:      入口包路径 (sharing 用 ./cmd/server/, trending/weekly 用 .)
 env:
   BINARY_NAME: starcat-trending-api
-  ENTRY: .
+  ENTRY: ./cmd/server/
 
 # 创建/更新 GitHub Release 需要写权限
 permissions:
