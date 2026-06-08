@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-08
+
 ### Added
 - Go 语言重写版本（基于 [Python 原版](https://github.com/doforce/github-trending)）
 - 标准库 `net/http` 实现 REST API
@@ -16,8 +18,7 @@
 - Dependabot 自动依赖更新
 - Issue / PR 模板
 - Security 政策
-
-## [2.0.0] - 2024-XX-XX
+- 内部版本号包 (`internal/version`, 暴露 `version.Version` 常量)
 
 ### Changed
 - **重写**：从 Python/FastAPI 重写为 Go
