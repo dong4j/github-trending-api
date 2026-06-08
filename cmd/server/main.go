@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"github-trending-api/internal/spider"
+	"starcat-trending-api/internal/spider"
 )
 
 // ResponseWriter 包装 http.ResponseWriter 以提供 JSON 编码方法

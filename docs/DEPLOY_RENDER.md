@@ -14,7 +14,7 @@
 
 1. 登录 [Render Dashboard](https://dashboard.render.com/)
 2. 点击 **New** → **Blueprint**
-3. 连接你的 GitHub 仓库 `dong4j/github-trending-api`
+3. 连接你的 GitHub 仓库 `dong4j/starcat-trending-api`
 4. Render 会自动检测 `render.yaml` 并创建服务
 5. 点击 **Apply** 开始部署
 
@@ -47,15 +47,15 @@
 部署成功后访问：
 
 ```
-https://github-trending-api-xxxx.onrender.com/
+https://starcat-trending-api-xxxx.onrender.com/
 ```
 
 测试 API：
 
 ```bash
-curl https://github-trending-api-xxxx.onrender.com/
-curl https://github-trending-api-xxxx.onrender.com/lang | head -c 200
-curl https://github-trending-api-xxxx.onrender.com/repo?lang=go | head -c 200
+curl https://starcat-trending-api-xxxx.onrender.com/
+curl https://starcat-trending-api-xxxx.onrender.com/lang | head -c 200
+curl https://starcat-trending-api-xxxx.onrender.com/repo?lang=go | head -c 200
 ```
 
 ## ⚠️ 免费层休眠问题

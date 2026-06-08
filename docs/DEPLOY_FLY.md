@@ -66,23 +66,23 @@ fly open
 ```
 
 部署成功后，你会得到：
-- **默认域名**：`https://dong4j-github-trending-api.fly.dev`
+- **默认域名**：`https://dong4j-starcat-trending-api.fly.dev`
 - **自定义域名**：可在 Dashboard 配置
 
 ## 🧪 测试 API
 
 ```bash
 # 健康检查
-curl https://dong4j-github-trending-api.fly.dev/
+curl https://dong4j-starcat-trending-api.fly.dev/
 
 # 测试 /lang
-curl https://dong4j-github-trending-api.fly.dev/lang | head -c 200
+curl https://dong4j-starcat-trending-api.fly.dev/lang | head -c 200
 
 # 测试 /repo
-curl https://dong4j-github-trending-api.fly.dev/repo?lang=go | head -c 200
+curl https://dong4j-starcat-trending-api.fly.dev/repo?lang=go | head -c 200
 
 # 测试 /user
-curl https://dong4j-github-trending-api.fly.dev/user | head -c 200
+curl https://dong4j-starcat-trending-api.fly.dev/user | head -c 200
 ```
 
 ## 🔧 常用命令
@@ -110,7 +110,7 @@ fly config env
 fly secrets set MY_VAR=xxx
 
 # 销毁应用
-fly apps destroy dong4j-github-trending-api
+fly apps destroy dong4j-starcat-trending-api
 ```
 
 ## 💰 费用
@@ -155,7 +155,7 @@ fly deploy --verbose
 fly checks list
 
 # 重启应用
-fly apps restart dong4j-github-trending-api
+fly apps restart dong4j-starcat-trending-api
 ```
 
 ## 📚 参考

@@ -6,7 +6,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github-trending-api/internal/models"
+	"starcat-trending-api/internal/models"
 )
 
 // LangSpider 语言列表爬虫

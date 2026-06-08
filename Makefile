@@ -99,16 +99,16 @@ tidy: ## 整理 go.mod / go.sum
 # ===========================================
 .PHONY: docker-build
 docker-build: ## 构建 Docker 镜像
-	@docker build -t github-trending-api:latest .
-	@echo "✓ Docker 镜像构建完成: github-trending-api:latest"
+	@docker build -t starcat-trending-api:latest .
+	@echo "✓ Docker 镜像构建完成: starcat-trending-api:latest"
 
 .PHONY: docker-run
 docker-run: ## 运行 Docker 容器
-	@docker run --rm -p 5002:5002 github-trending-api:latest
+	@docker run --rm -p 5002:5002 starcat-trending-api:latest
 
 .PHONY: docker-clean
 docker-clean: ## 清理 Docker 镜像
-	@docker rmi github-trending-api:latest 2>/dev/null || true
+	@docker rmi starcat-trending-api:latest 2>/dev/null || true
 	@echo "✓ Docker 镜像已清理"
 
 # ===========================================

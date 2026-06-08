@@ -1,4 +1,4 @@
-module github-trending-api
+module starcat-trending-api
 
 go 1.25.0
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github-trending-api/internal/models"
+	"starcat-trending-api/internal/models"
 )
 
 // UserSpider 开发者 trending 爬虫

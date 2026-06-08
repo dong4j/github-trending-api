@@ -19,7 +19,7 @@
 ## 📂 项目结构
 
 ```
-github-trending-api/
+starcat-trending-api/
 ├── cmd/server/main.go          # HTTP 服务器入口
 ├── internal/
 │   ├── models/models.go        # 数据模型定义
@@ -77,12 +77,12 @@ go build -o bin/server ./cmd/server/
 # 构建镜像
 make docker-build
 # 或
-docker build -t github-trending-api .
+docker build -t starcat-trending-api .
 
 # 运行
 make docker-run
 # 或
-docker run --rm -p 5002:5002 github-trending-api
+docker run --rm -p 5002:5002 starcat-trending-api
 ```
 
 服务器将在 `http://localhost:5002` 启动。
@@ -227,7 +227,7 @@ fly open              # 打开应用
 ### 🚀 快速部署到 Render
 
 1. 在 Render Dashboard 点击 **New** → **Blueprint**
-2. 连接 `dong4j/github-trending-api` 仓库
+2. 连接 `dong4j/starcat-trending-api` 仓库
 3. Render 自动读取 `render.yaml` 并部署
 
 详细步骤见 [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md)。

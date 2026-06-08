@@ -17,7 +17,7 @@
 请通过以下方式私下联系：
 
 - **邮件**: dong4j@gmail.com
-- **主题前缀**: `[SECURITY] github-trending-api`
+- **主题前缀**: `[SECURITY] starcat-trending-api`
 
 我们会在 48 小时内回复确认，并在评估后尽快发布补丁。
 

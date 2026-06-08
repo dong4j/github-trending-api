@@ -30,5 +30,5 @@
 - `GET /repo?lang=&since=` - 完全兼容
 - `GET /user?lang=&since=&sponsorable=` - 完全兼容
 
-[Unreleased]: https://github.com/dong4j/github-trending-api/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/dong4j/github-trending-api/releases/tag/v2.0.0
+[Unreleased]: https://github.com/dong4j/starcat-trending-api/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/dong4j/starcat-trending-api/releases/tag/v2.0.0
