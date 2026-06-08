@@ -6,8 +6,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"starcat-trending-api/internal/models"
-	"starcat-trending-api/pkg/utils"
+	"github.com/dong4j/starcat-trending-api/internal/models"
+	"github.com/dong4j/starcat-trending-api/pkg/utils"
 )
 
 // RepoSpider 仓库 trending 爬虫

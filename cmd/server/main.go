@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"starcat-trending-api/internal/spider"
+	"github.com/dong4j/starcat-trending-api/internal/spider"
 )
 
 // ResponseWriter 包装 http.ResponseWriter 以提供 JSON 编码方法
@@ -16,18 +16,15 @@ type ResponseWriter struct {
 	http.ResponseWriter
 }
 
-func (rw *ResponseWriter) JSON(data interface{}) {
+func (rw *ResponseWriter) JSON(data any) {
 	rw.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(rw.ResponseWriter).Encode(data)
 }
 
-// rootHandler 根路径处理函数
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]string{"message": "Hello GitHub trending"})
+// healthzHandler 健康探活端点（与 sharing / weekly 的 /healthz 对齐）
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }
 
 // langHandler 获取所有可用语言
@@ -72,20 +69,21 @@ func main() {
 		port = "5002"
 	}
 
-	// 注册路由
-	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/lang", langHandler)
-	http.HandleFunc("/repo", repoHandler)
-	http.HandleFunc("/user", userHandler)
+	// 注册路由(Go 1.22+ 风格: 自定义 mux + method-aware 路径)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthzHandler)
+	mux.HandleFunc("GET /lang", langHandler)
+	mux.HandleFunc("GET /repo", repoHandler)
+	mux.HandleFunc("GET /user", userHandler)
 
 	log.Printf("GitHub Trending API server starting on port %s", port)
 	log.Printf("Endpoints:")
-	log.Printf("  GET /         - Welcome message")
+	log.Printf("  GET /healthz  - Health check")
 	log.Printf("  GET /lang     - Get all available languages")
 	log.Printf("  GET /repo     - Get trending repositories (params: lang, since)")
 	log.Printf("  GET /user     - Get trending developers (params: lang, since, sponsorable)")
 
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		log.Fatal(err)
 	}
 }
