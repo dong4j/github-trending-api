@@ -4,9 +4,12 @@ name: Go
 # 触发条件
 # ===========================================
 on:
-  # push 到 main / master 分支时触发
+  # push 到 main / master 分支时触发 (PR merge 后验证)
   push:
     branches: [main, master]
+    # tag 推送时也触发 (发版后再次验证 release 包能编译)
+    # 配合 scripts/deploy.sh: tag 推送后自动跑一次 CI
+    tags: ['v*']
   # 收到指向 main / master 的 PR 时触发
   pull_request:
     branches: [main, master]
@@ -61,7 +64,7 @@ jobs:
 
       # 6. 编译检查
       - name: Build
-        run: go build -v -o starcat-trending-api .
+        run: go build -v -o starcat-trending-api ./cmd/server/
 
       # 7. 单元测试
       - name: Test
