@@ -1,0 +1,187 @@
+name: Release
+
+# ===========================================
+# 触发条件
+# ===========================================
+# 监听 go.yml 完成后, 仅在 tag 推送触发的 go.yml 成功时跑
+# 配合 scripts/deploy.sh: 推 tag → go.yml 跑 → release.yml 产出多平台二进制 + 发 GitHub Release
+#
+# 与其他 workflow 的关系 (3 个项目统一):
+#   go.yml         : 验证编译 + 单测 (PR check, 推 tag 时也跑)
+#   fly-deploy.yml : 部署到 Fly.io (同样监听 go.yml 完成)
+#   release.yml    : 多平台构建 + 发 GitHub Release (本文件)
+#   docker.yml     : 推 Docker image 到 ghcr.io (仅 starcat-trending-api 有)
+#                     tag 推送时 release.yml 与 docker.yml 并行跑, 职责不同不冲突
+on:
+  workflow_run:
+    workflows: ["Go"]
+    types: [completed]
+  workflow_dispatch:  # 手动触发 (Actions 页面), 便于本地测试
+
+# 项目参数: 3 个 starcat-*-api 项目共用同一份 release.yml 模板
+# 同步修改规则见 supports/AGENTS.md: 3 项目任何 workflow 改动必须同步
+# - BINARY_NAME: 二进制输出名 (必须与 go.yml build -o 一致)
+# - ENTRY:      入口包路径 (sharing 用 ./cmd/server/, trending/weekly 用 .)
+env:
+  BINARY_NAME: starcat-trending-api
+  ENTRY: .
+
+# 创建/更新 GitHub Release 需要写权限
+permissions:
+  contents: write
+
+jobs:
+  # ===========================================
+  # 阶段 1: 多平台并行构建 (matrix 5 个组合)
+  # ===========================================
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    # 三种情况允许跑:
+    # 1. workflow_dispatch 手动触发 (本地测试)
+    # 2. workflow_run 触发, go.yml 成功, 且 head_branch 以 v 开头 (即 tag 推送)
+    # 否则: push main 触发的 go.yml 成功不跑 release, fly-deploy.yml 同理
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    strategy:
+      fail-fast: false
+      # 5 平台覆盖: linux/darwin/windows × amd64/arm64
+      # windows arm64 罕见且 Go toolchain 在 windows/arm 生态不完善, 省略
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+            ext: ''
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+            ext: ''
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
+            ext: ''
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+            ext: ''
+          - goos: windows
+            goarch: amd64
+            archive: zip
+            ext: '.exe'
+
+    steps:
+      # 1. Checkout 触发 go.yml 的那个 commit (而非默认 HEAD)
+      #    workflow_run 模式下默认 checkout 是当前 ref, 不是触发它的 commit
+      #    head_sha 是稳定指向, 即使后续有 push 也不会变
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      # 2. 安装 Go (与 go.yml 矩阵版本一致: 1.25)
+      #    cache: true 复用 go mod 下载缓存, 加速重复构建
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # 3. 跨平台编译 + 打包
+      #    -trimpath: 移除构建路径 (二进制可重现)
+      #    -ldflags="-s -w": 剥离符号表, 缩小体积约 30%
+      #    CGO_ENABLED=0: 纯静态二进制, 无 glibc 依赖 (linux/macos/windows 全平台适用)
+      - name: Build & archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          EXT: ${{ matrix.ext }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          OUTPUT="${BINARY_NAME}${EXT}"
+          echo "Building ${GOOS}/${GOARCH}: ${OUTPUT}"
+          go build -trimpath -ldflags="-s -w" -o "${OUTPUT}" "${ENTRY}"
+
+          mkdir -p dist
+          if [ "${ARCHIVE}" = "zip" ]; then
+            (cd dist && zip -q "${BINARY_NAME}_${GOOS}_${GOARCH}.zip" "../${OUTPUT}")
+          else
+            tar -C . -czf "dist/${BINARY_NAME}_${GOOS}_${GOARCH}.tar.gz" "${OUTPUT}"
+          fi
+          rm "${OUTPUT}"
+
+      # 4. 上传构建产物 (供 release job 下载汇总)
+      #    artifact 名用连字符 (artifact name 不允许下划线, 这是 GH 规则)
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ env.BINARY_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 5
+
+  # ===========================================
+  # 阶段 2: 汇总所有产物, 发 GitHub Release (单 job, 等 build 完成)
+  # ===========================================
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # 与 build job 同样的过滤逻辑: workflow_dispatch 或 tag 触发的 go.yml 成功
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+
+    steps:
+      # 1. Checkout (仅用于 git describe 找 tag, 不实际编译)
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      # 2. 提取 tag 名
+      #    - workflow_run 触发: tag = head_branch (push tag 时 head_branch 就是 tag 名)
+      #    - workflow_dispatch 触发: 取当前 HEAD 最新 tag, 无 tag 兜底用 manual-<run_id>
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "manual-${{ github.run_id }}")
+          else
+            TAG=${{ github.event.workflow_run.head_branch }}
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${TAG}"
+
+      # 3. 下载所有 build job 上传的产物到 dist/
+      #    merge-multiple: true 把所有 artifact 合并到同一目录
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # 4. 生成 SHA256 checksums (Go release 圈惯例, 方便用户验证下载完整性)
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      # 5. 创建/更新 GitHub Release + 上传所有产物
+      #    generate_release_notes: true 自动从 PR + commit 聚合 release notes
+      #    files 模式 dist/* 会把 checksums.txt 也带上
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*
