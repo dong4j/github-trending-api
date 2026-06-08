@@ -4,12 +4,10 @@ name: Docker
 # 触发条件
 # ===========================================
 on:
-  push:
-    branches: [main, master]
-    tags: ["v*.*.*"]
-  pull_request:
-    branches: [main, master]
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Go"]
+    types: [completed]
+  workflow_dispatch:  # 手动触发 (Actions 页面), 便于本地测试
 
 # ===========================================
 # 任务定义
