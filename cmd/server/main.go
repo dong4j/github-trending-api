@@ -1,5 +1,5 @@
-// Package main 提供 GitHub Trending API 服务器
-// 使用 Go 标准库实现 REST API，与 Python FastAPI 版本保持相同的端点和响应格式
+// Package main is the entry point for starcat-trending-api.
+// It serves a GitHub Trending API backed by goquery HTML scraping.
 package main
 
 import (
@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/dong4j/starcat-trending-api/internal/spider"
 )
 
-// ResponseWriter 包装 http.ResponseWriter 以提供 JSON 编码方法
+// ResponseWriter wraps http.ResponseWriter with a JSON helper.
 type ResponseWriter struct {
 	http.ResponseWriter
 }
@@ -21,21 +23,21 @@ func (rw *ResponseWriter) JSON(data any) {
 	json.NewEncoder(rw.ResponseWriter).Encode(data)
 }
 
-// healthzHandler 健康探活端点（与 sharing / weekly 的 /healthz 对齐）
+// healthzHandler health check (used by Fly.io http_service.checks)
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-// langHandler 获取所有可用语言
+// langHandler lists all available languages.
 func langHandler(w http.ResponseWriter, r *http.Request) {
 	spiderInstance := spider.NewLangSpider()
 	items := spiderInstance.GetItems()
 	(&ResponseWriter{ResponseWriter: w}).JSON(items)
 }
 
-// repoHandler 获取 trending 仓库列表
-// Query 参数: lang (可选), since (可选，默认 daily)
+// repoHandler lists trending repositories.
+// Query params: lang (optional), since (optional, default daily)
 func repoHandler(w http.ResponseWriter, r *http.Request) {
 	lang := r.URL.Query().Get("lang")
 	since := r.URL.Query().Get("since")
@@ -48,8 +50,8 @@ func repoHandler(w http.ResponseWriter, r *http.Request) {
 	(&ResponseWriter{ResponseWriter: w}).JSON(items)
 }
 
-// userHandler 获取 trending 开发者列表
-// Query 参数: lang (可选), since (可选，默认 daily), sponsorable (可选)
+// userHandler lists trending developers.
+// Query params: lang (optional), since (optional, default daily), sponsorable (optional)
 func userHandler(w http.ResponseWriter, r *http.Request) {
 	lang := r.URL.Query().Get("lang")
 	since := r.URL.Query().Get("since")
@@ -69,14 +71,23 @@ func main() {
 		port = "5002"
 	}
 
-	// 注册路由(Go 1.22+ 风格: 自定义 mux + method-aware 路径)
+	// Register routes (Go 1.22+ style: custom mux + method-aware paths)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
 	mux.HandleFunc("GET /lang", langHandler)
 	mux.HandleFunc("GET /repo", repoHandler)
 	mux.HandleFunc("GET /user", userHandler)
 
-	log.Printf("GitHub Trending API server starting on port %s", port)
+	// Graceful shutdown on SIGINT / SIGTERM
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Received shutdown signal, closing service...")
+		os.Exit(0)
+	}()
+
+	log.Printf("starcat-trending-api starting on port %s", port)
 	log.Printf("Endpoints:")
 	log.Printf("  GET /healthz  - Health check")
 	log.Printf("  GET /lang     - Get all available languages")

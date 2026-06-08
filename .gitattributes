@@ -16,6 +16,7 @@ go.sum text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.json text eol=lf
+*.html text eol=lf
 
 # Shell 脚本
 *.sh text eol=lf

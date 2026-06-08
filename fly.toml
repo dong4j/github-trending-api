@@ -2,6 +2,8 @@
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
+# 与 starcat-sharing-api / starcat-weekly-api 保持一致的 Fly.io 部署配置
+# (端口、env、health check 等参照其他两个项目对齐)
 
 app = 'starcat-trending-api'
 primary_region = 'nrt'
@@ -38,7 +40,7 @@ primary_region = 'nrt'
     timeout = '5s'
     grace_period = '10s'
     method = 'GET'
-    path = '/'
+    path = '/healthz'
 
 [[vm]]
   size = 'shared-cpu-1x'
