@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 
 	_ "modernc.org/sqlite"
@@ -24,7 +25,7 @@ func migrate(db *sql.DB) error {
 }
 
 func setUserVersion(tx *sql.Tx, version int) error {
-	_, err := tx.Exec("PRAGMA user_version = ?", version)
+	_, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version))
 	return err
 }
 
