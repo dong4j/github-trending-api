@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-09
+
+### Added
+- **三层架构**：spider（爬虫）→ store（SQLite）→ enricher（GitHub API 补全）
+- **SQLite 持久化**：`trending_repos` + `trending_languages` 表，WAL 模式
+- **GitHub API Enricher**：补全 `gh_repo_id`、topics、license、owner_avatar 等 18 个字段
+- **Token Pool**：多 GitHub PAT 冗余 + Quota-aware `PickBest()` + 故障切换
+- **Rate Limit 退避**：主动读 `X-RateLimit-Remaining` 头，低配额自动减速
+- **Cron Scheduler**：daily/weekly/monthly 定时爬取 + 长尾 enrich + 过期清理
+- **Enrich Queue**：优先级队列 + worker pool（`enrich_priority DESC`）
+- **Bearer Token 鉴权**：所有 `/api/v1/*` 和 `/internal/*` 端点强制鉴权
+- **Admin Endpoints**：`/internal/sync/{repos,languages,users}` 手动触发同步
+- **Envelope 统一响应**：`schema_version` + `data` / `error` + `meta`
+- **`.env` 配置**：godotenv 加载，敏感值走 fly secrets
+
+### Changed
+- **Breaking**: `GET /repo` → `GET /api/v1/repos`（旧路径直接删除，含 envelope）
+- **Breaking**: `GET /lang` → `GET /api/v1/languages`
+- **Breaking**: `GET /user` → `GET /api/v1/users`
+- **Breaking**: 所有端点（除 `/healthz`）需 Bearer Token
+- **Breaking**: 响应格式升级为 envelope（嵌套 `data` / `error`）
+- `internal/models/` → `internal/model/` + spider 类型迁入 `internal/spider/types.go`
+
+### Removed
+- `GET /` 欢迎端点
+- `GET /lang`、`GET /repo`、`GET /user` 旧端点
+- `internal/models/models.go`（类型迁至 spider 包）
+
 ## [1.0.0] - 2026-06-08
 
 ### Added

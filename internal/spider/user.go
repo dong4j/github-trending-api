@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-
-	"github.com/dong4j/starcat-trending-api/internal/models"
 )
 
 // UserSpider 开发者 trending 爬虫
@@ -47,8 +45,8 @@ func (u *UserSpider) GetURL() string {
 }
 
 // Parse 解析开发者列表页
-func (u *UserSpider) Parse(html string) []models.UserItem {
-	var items []models.UserItem
+func (u *UserSpider) Parse(html string) []UserItem {
+	var items []UserItem
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -57,7 +55,7 @@ func (u *UserSpider) Parse(html string) []models.UserItem {
 
 	// 找到 article[id^="pa-"] 的元素
 	doc.Find("article[id^=pa-]").Each(func(i int, article *goquery.Selection) {
-		item := models.UserItem{}
+		item := UserItem{}
 
 		// 获取头像
 		imgSel := article.Find("div > a:has(img) img")
@@ -94,7 +92,7 @@ func (u *UserSpider) Parse(html string) []models.UserItem {
 				desc = strings.TrimSpace(s.Text())
 			})
 
-			item.Popular = &models.PopItem{
+			item.Popular = &PopItem{
 				Repo: repo,
 				Desc: desc,
 			}
@@ -107,10 +105,10 @@ func (u *UserSpider) Parse(html string) []models.UserItem {
 }
 
 // GetItems 获取 trending 开发者列表
-func (u *UserSpider) GetItems() []models.UserItem {
+func (u *UserSpider) GetItems() []UserItem {
 	html, err := u.Fetch(u.GetURL())
 	if err != nil {
-		return []models.UserItem{}
+		return []UserItem{}
 	}
 	return u.Parse(html)
 }

@@ -6,7 +6,6 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/dong4j/starcat-trending-api/internal/models"
 	"github.com/dong4j/starcat-trending-api/pkg/utils"
 )
 
@@ -50,8 +49,8 @@ func encodeLangParam(lang string) string {
 }
 
 // Parse 解析仓库列表页
-func (r *RepoSpider) Parse(html string) []models.RepoItem {
-	var items []models.RepoItem
+func (r *RepoSpider) Parse(html string) []RepoItem {
+	var items []RepoItem
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -60,7 +59,7 @@ func (r *RepoSpider) Parse(html string) []models.RepoItem {
 
 	// 找到 [data-hpc] 下的 article 标签
 	doc.Find("[data-hpc]").Find("article").Each(func(i int, article *goquery.Selection) {
-		item := models.RepoItem{}
+		item := RepoItem{}
 
 		// 获取 repo 路径 (href)
 		h2 := article.Find("h2")
@@ -109,7 +108,7 @@ func (r *RepoSpider) Parse(html string) []models.RepoItem {
 		})
 
 		// 解析 build_by (构建者头像)
-		var buildByList []models.BuildBy
+		var buildByList []BuildBy
 		footer.Find("div > span").EachWithBreak(func(_ int, span *goquery.Selection) bool {
 			// 查找包含 a 标签的 span (构建者)
 			aTags := span.Find("a")
@@ -119,7 +118,7 @@ func (r *RepoSpider) Parse(html string) []models.RepoItem {
 					if img.Length() > 0 {
 						avatar, _ := img.Attr("src")
 						href, _ := a.Attr("href")
-						buildByList = append(buildByList, models.BuildBy{
+						buildByList = append(buildByList, BuildBy{
 							Avatar: avatar,
 							By:     href,
 						})
@@ -149,10 +148,10 @@ func (r *RepoSpider) Parse(html string) []models.RepoItem {
 }
 
 // GetItems 获取 trending 仓库列表
-func (r *RepoSpider) GetItems() []models.RepoItem {
+func (r *RepoSpider) GetItems() []RepoItem {
 	html, err := r.Fetch(r.GetURL())
 	if err != nil {
-		return []models.RepoItem{}
+		return []RepoItem{}
 	}
 	return r.Parse(html)
 }

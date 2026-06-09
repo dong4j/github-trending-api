@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-
-	"github.com/dong4j/starcat-trending-api/internal/models"
 )
 
 // LangSpider 语言列表爬虫
@@ -28,8 +26,8 @@ func (l *LangSpider) GetURL() string {
 }
 
 // Parse 解析语言列表页
-func (l *LangSpider) Parse(html string) []models.LangItem {
-	var items []models.LangItem
+func (l *LangSpider) Parse(html string) []LangItem {
+	var items []LangItem
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -48,7 +46,7 @@ func (l *LangSpider) Parse(html string) []models.LangItem {
 		key := regexp.MustCompile(`^/trending|/`).ReplaceAllString(href, "")
 		key = strings.Split(key, "?")[0]
 
-		items = append(items, models.LangItem{
+		items = append(items, LangItem{
 			Label: label,
 			Key:   key,
 		})
@@ -58,10 +56,10 @@ func (l *LangSpider) Parse(html string) []models.LangItem {
 }
 
 // GetItems 获取语言列表
-func (l *LangSpider) GetItems() []models.LangItem {
+func (l *LangSpider) GetItems() []LangItem {
 	html, err := l.Fetch(l.GetURL())
 	if err != nil {
-		return []models.LangItem{}
+		return []LangItem{}
 	}
 	return l.Parse(html)
 }

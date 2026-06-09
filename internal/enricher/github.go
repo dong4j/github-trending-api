@@ -1,0 +1,260 @@
+package enricher
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/dong4j/starcat-trending-api/internal/model"
+	"github.com/dong4j/starcat-trending-api/internal/store"
+	"github.com/dong4j/starcat-trending-api/internal/tokenpool"
+)
+
+// githubRepoResponse 是 GET /repos/{o}/{r} 的完整响应。
+type githubRepoResponse struct {
+	ID            int64    `json:"id"`
+	FullName      string   `json:"full_name"`
+	Description   *string  `json:"description"`
+	Stargazers    int      `json:"stargazers_count"`
+	Forks         int      `json:"forks_count"`
+	Watchers      int      `json:"watchers_count"`
+	Subscribers   int      `json:"subscribers_count"`
+	Language      *string  `json:"language"`
+	Topics        []string `json:"topics"`
+	Homepage      *string  `json:"homepage"`
+	License       *struct {
+		SpdxID *string `json:"spdx_id"`
+	} `json:"license"`
+	Archived      bool    `json:"archived"`
+	Fork          bool    `json:"fork"`
+	Private       bool    `json:"private"`
+	DefaultBranch string  `json:"default_branch"`
+	OpenIssues    int     `json:"open_issues_count"`
+	PushedAt      string  `json:"pushed_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	CreatedAt     string  `json:"created_at"`
+	Owner         *struct {
+		AvatarURL *string `json:"avatar_url"`
+	} `json:"owner"`
+	Message string `json:"message"`
+}
+
+// Enricher 管理 GitHub API 字段补全。
+//
+// inflight 字段 (R-01 v1.2 §4.2): 防止「EnrichQueue 2 worker 并发 + scheduler
+// 定时调 EnrichAll」时，同一个 (full_name, since) 被多个调用方同时 enrich，
+// 浪费 GitHub API quota 的 race。
+//   - GetUnenrichedRepos 本身没有 row lock；
+//   - EnrichOne 中 HTTP 调用窗口可能长达 1-2s，足以让另一个 worker 拿到同一行；
+//   - 通过 in-process map 跟踪正在处理的 key，第二个调用方直接 skip。
+type Enricher struct {
+	store     store.Store
+	pool      *tokenpool.Pool
+	rateLimit *RateLimitHandler
+	client    *http.Client
+	workerCnt int
+
+	inflightMu sync.Mutex
+	inflight   map[string]bool // key = full_name + "@" + since
+}
+
+// New 创建 Enricher。
+func New(s store.Store, p *tokenpool.Pool, rl *RateLimitHandler) *Enricher {
+	return &Enricher{
+		store:     s,
+		pool:      p,
+		rateLimit: rl,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		workerCnt: 2,
+		inflight:  make(map[string]bool),
+	}
+}
+
+// tryAcquire 尝试占用某个 repo 的 enrich 处理权。
+// 返回 false 表示已有别的 worker 在处理，调用方应跳过。
+func (e *Enricher) tryAcquire(repo *model.TrendingRepo) bool {
+	key := repo.FullName + "@" + repo.Since
+	e.inflightMu.Lock()
+	defer e.inflightMu.Unlock()
+	if e.inflight[key] {
+		return false
+	}
+	e.inflight[key] = true
+	return true
+}
+
+// release 释放占用（必须 defer 调用）。
+func (e *Enricher) release(repo *model.TrendingRepo) {
+	key := repo.FullName + "@" + repo.Since
+	e.inflightMu.Lock()
+	delete(e.inflight, key)
+	e.inflightMu.Unlock()
+}
+
+// EnrichAll 全量 enrich 所有待处理 repo。
+func (e *Enricher) EnrichAll() {
+	offset := 0
+	batchSize := 30
+	enriched := 0
+
+	for {
+		repos, err := e.store.GetUnenrichedRepos(batchSize)
+		if err != nil {
+			log.Printf("[enricher] GetUnenrichedRepos error: %v", err)
+			return
+		}
+		if len(repos) == 0 {
+			break
+		}
+
+		for i := range repos {
+			if err := e.EnrichOne(&repos[i]); err != nil {
+				log.Printf("[enricher] enrich %s failed: %v", repos[i].FullName, err)
+				continue
+			}
+			enriched++
+		}
+		offset += len(repos)
+		if enriched%100 == 0 {
+			alive, dead, remaining, _ := e.pool.Stats()
+			log.Printf("[enricher] progress: %d enriched | [token-pool] alive=%d dead=%d remaining=%d",
+				enriched, alive, dead, remaining)
+		}
+	}
+
+	log.Printf("[enricher] EnrichAll done: %d repos enriched", enriched)
+}
+
+// EnrichOne 单 repo enrich，最多重试 3 次。
+//
+// double-enrich 防御 (R-01 §4.2)：函数顶部 tryAcquire，如已被另一个调用方占用，
+// 直接返回 nil（视为 no-op 而非 error，不影响调用方计数）。
+func (e *Enricher) EnrichOne(repo *model.TrendingRepo) error {
+	if !e.tryAcquire(repo) {
+		return nil
+	}
+	defer e.release(repo)
+
+	owner, name := repo.Owner, repo.Name
+
+	for attempt := 0; attempt < 3; attempt++ {
+		token := e.pool.PickBest()
+		if token == nil {
+			resetAt := e.pool.EarliestReset()
+			if !resetAt.IsZero() {
+				sleepDuration := time.Until(resetAt)
+				if sleepDuration > 0 {
+					log.Printf("[enricher] all tokens exhausted, sleeping until %s", resetAt.Format(time.RFC3339))
+					time.Sleep(sleepDuration)
+				}
+			}
+			continue
+		}
+
+		e.rateLimit.Wait()
+
+		url := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, name)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Authorization", "Bearer "+token.Value)
+		req.Header.Set("User-Agent", "starcat-trending-api/1.0")
+		req.Header.Set("Accept", "application/vnd.github+json")
+
+		resp, err := e.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("http GET %s: %w", url, err)
+		}
+		e.pool.UpdateFromResponse(token, resp)
+
+		switch resp.StatusCode {
+		case 200:
+			var gh githubRepoResponse
+			if err := json.NewDecoder(resp.Body).Decode(&gh); err != nil {
+				resp.Body.Close()
+				return fmt.Errorf("decode response: %w", err)
+			}
+			resp.Body.Close()
+
+			updated := buildEnrichedRepo(repo, &gh)
+			if err := e.store.UpdateEnriched(repo.FullName, repo.Since, updated); err != nil {
+				return fmt.Errorf("update enriched: %w", err)
+			}
+			return nil
+
+		case 404:
+			resp.Body.Close()
+			_ = e.store.MarkUnavailable(repo.FullName, repo.Since)
+			return nil
+
+		case 401:
+			// TokenPool 已标 dead，重试自动用下一个
+			resp.Body.Close()
+			continue
+
+		case 429, 403:
+			resp.Body.Close()
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				s, _ := strconv.Atoi(retryAfter)
+				if s > 0 {
+					log.Printf("[enricher] 429, sleeping %ds", s)
+					time.Sleep(time.Duration(s) * time.Second)
+				}
+			}
+			continue
+
+		case 502, 503:
+			resp.Body.Close()
+			continue
+
+		default:
+			resp.Body.Close()
+			if resp.StatusCode >= 500 {
+				continue
+			}
+			return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		}
+	}
+	return fmt.Errorf("enrichOne %s/%s failed after 3 attempts", owner, name)
+}
+
+// buildEnrichedRepo 将 GitHub API 响应映射到 TrendingRepo 字段。
+func buildEnrichedRepo(repo *model.TrendingRepo, gh *githubRepoResponse) model.TrendingRepo {
+	r := *repo
+
+	r.GhRepoID = &gh.ID
+	r.Description = gh.Description
+	r.Homepage = gh.Homepage
+	r.Watchers = gh.Watchers
+	r.Subscribers = gh.Subscribers
+	r.IsArchived = gh.Archived
+	r.IsFork = gh.Fork
+	r.IsPrivate = gh.Private
+	r.DefaultBranch = &gh.DefaultBranch
+	r.OpenIssues = gh.OpenIssues
+	r.PushedAt = &gh.PushedAt
+	r.UpdatedAt = &gh.UpdatedAt
+	r.CreatedAt = &gh.CreatedAt
+	r.Stars = gh.Stargazers
+	r.Forks = gh.Forks
+	if gh.Language != nil {
+		r.Language = gh.Language
+	}
+
+	if gh.License != nil && gh.License.SpdxID != nil {
+		r.LicenseSpdx = gh.License.SpdxID
+	}
+	if gh.Owner != nil && gh.Owner.AvatarURL != nil {
+		r.OwnerAvatar = gh.Owner.AvatarURL
+	}
+
+	if len(gh.Topics) > 0 {
+		b, _ := json.Marshal(gh.Topics)
+		s := string(b)
+		r.TopicsJSON = &s
+	}
+
+	return r
+}

@@ -1,100 +1,125 @@
-// Package main is the entry point for starcat-trending-api.
-// It serves a GitHub Trending API backed by goquery HTML scraping.
+// Package main 是 starcat-trending-api 的入口。
+//
+// R-01 v1.2: 从无状态爬虫升级为三层架构
+//
+//	spider（爬虫）→ store（SQLite）→ enricher（GitHub API 补全）→ scheduler（cron）
+//	+ Bearer Token 鉴权 + Token Pool + /api/v1/* 契约。
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
-	"github.com/dong4j/starcat-trending-api/internal/spider"
+	"github.com/joho/godotenv"
+
+	"github.com/dong4j/starcat-trending-api/internal/enricher"
+	"github.com/dong4j/starcat-trending-api/internal/handler"
+	"github.com/dong4j/starcat-trending-api/internal/middleware"
+	"github.com/dong4j/starcat-trending-api/internal/scheduler"
+	"github.com/dong4j/starcat-trending-api/internal/store"
+	"github.com/dong4j/starcat-trending-api/internal/tokenpool"
 )
 
-// ResponseWriter wraps http.ResponseWriter with a JSON helper.
-type ResponseWriter struct {
-	http.ResponseWriter
-}
-
-func (rw *ResponseWriter) JSON(data any) {
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw.ResponseWriter).Encode(data)
-}
-
-// healthzHandler health check (used by Fly.io http_service.checks)
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
-}
-
-// langHandler lists all available languages.
-func langHandler(w http.ResponseWriter, r *http.Request) {
-	spiderInstance := spider.NewLangSpider()
-	items := spiderInstance.GetItems()
-	(&ResponseWriter{ResponseWriter: w}).JSON(items)
-}
-
-// repoHandler lists trending repositories.
-// Query params: lang (optional), since (optional, default daily)
-func repoHandler(w http.ResponseWriter, r *http.Request) {
-	lang := r.URL.Query().Get("lang")
-	since := r.URL.Query().Get("since")
-	if since == "" {
-		since = "daily"
-	}
-
-	spiderInstance := spider.NewRepoSpider(since, lang)
-	items := spiderInstance.GetItems()
-	(&ResponseWriter{ResponseWriter: w}).JSON(items)
-}
-
-// userHandler lists trending developers.
-// Query params: lang (optional), since (optional, default daily), sponsorable (optional)
-func userHandler(w http.ResponseWriter, r *http.Request) {
-	lang := r.URL.Query().Get("lang")
-	since := r.URL.Query().Get("since")
-	if since == "" {
-		since = "daily"
-	}
-	sponsorable := r.URL.Query().Get("sponsorable")
-
-	spiderInstance := spider.NewUserSpider(since, lang, sponsorable)
-	items := spiderInstance.GetItems()
-	(&ResponseWriter{ResponseWriter: w}).JSON(items)
-}
-
 func main() {
+	// 加载 .env
+	if err := godotenv.Load(); err != nil {
+		log.Printf("[env] no .env file found, using OS environment only")
+	} else {
+		log.Printf("[env] .env loaded")
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "5002"
 	}
 
-	// Register routes (Go 1.22+ style: custom mux + method-aware paths)
+	storeFile := os.Getenv("STORE_FILE")
+	if storeFile == "" {
+		storeFile = "./trending.db"
+	}
+
+	apiKeysStr := os.Getenv("API_KEYS")
+	if apiKeysStr == "" {
+		log.Fatal("API_KEYS env is required")
+	}
+	apiKeys := strings.Split(apiKeysStr, ",")
+
+	tokensStr := os.Getenv("GITHUB_TOKENS")
+	if tokensStr == "" {
+		log.Fatal("GITHUB_TOKENS env is required (at least 1 GitHub PAT)")
+	}
+	tokens := strings.Split(tokensStr, ",")
+
+	// SQLite Store
+	sqliteStore, err := store.NewSQLiteStore(storeFile)
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	// Token Pool
+	pool := tokenpool.New(tokens)
+
+	// Rate Limit Handler（5000 req/h → 720ms/req 兜底间隔）
+	rateLimitHandler := enricher.NewRateLimitHandler(720 * time.Millisecond)
+
+	// Enricher
+	enc := enricher.New(sqliteStore, pool, rateLimitHandler)
+
+	// Enrich Queue（后台 worker pool，持续处理 priority 最高的待 enrich repo）
+	enrichQueue := enricher.NewEnrichQueue(enc, 2)
+	enrichQueue.Start()
+	defer enrichQueue.Stop()
+
+	// Scheduler
+	sch := scheduler.New(sqliteStore, enc)
+
+	// Bearer 鉴权中间件
+	authMW := middleware.NewBearerAuth(apiKeys)
+
+	// 路由
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
-	mux.HandleFunc("GET /lang", langHandler)
-	mux.HandleFunc("GET /repo", repoHandler)
-	mux.HandleFunc("GET /user", userHandler)
+	mux.Handle("GET /api/v1/repos", authMW.Wrap(handler.HandleReposV1(sqliteStore)))
+	mux.Handle("GET /api/v1/languages", authMW.Wrap(handler.HandleLanguagesV1(sch)))
+	mux.Handle("GET /api/v1/users", authMW.Wrap(handler.HandleUsersV1()))
+	mux.Handle("POST /internal/sync/repos", authMW.Wrap(handler.HandleAdminSyncRepos(sch)))
+	mux.Handle("POST /internal/sync/languages", authMW.Wrap(handler.HandleAdminSyncLanguages(sch)))
+	mux.Handle("POST /internal/sync/users", authMW.Wrap(handler.HandleAdminSyncUsers()))
 
-	// Graceful shutdown on SIGINT / SIGTERM
+	// 优雅关闭
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("Received shutdown signal, closing service...")
+		sig := <-sigCh
+		log.Printf("Received %v, shutting down...", sig)
+		sch.Stop()
+		enrichQueue.Stop()
+		sqliteStore.Close()
 		os.Exit(0)
 	}()
 
+	// 冷启动：爬 daily + 语言列表
+	go sch.Start()
+
 	log.Printf("starcat-trending-api starting on port %s", port)
 	log.Printf("Endpoints:")
-	log.Printf("  GET /healthz  - Health check")
-	log.Printf("  GET /lang     - Get all available languages")
-	log.Printf("  GET /repo     - Get trending repositories (params: lang, since)")
-	log.Printf("  GET /user     - Get trending developers (params: lang, since, sponsorable)")
+	log.Printf("  GET  /api/v1/repos          - Trending repos (auth required)")
+	log.Printf("  GET  /api/v1/languages      - Languages list (auth required)")
+	log.Printf("  GET  /api/v1/users          - Trending developers (auth required)")
+	log.Printf("  POST /internal/sync/repos    - Manual sync trigger (auth required)")
+	log.Printf("  POST /internal/sync/languages - Languages refresh (auth required)")
+	log.Printf("  POST /internal/sync/users    - Developers refresh (auth required)")
+	log.Printf("  GET  /healthz               - Health check (public)")
+	log.Fatal(http.ListenAndServe(":"+port, mux))
+}
 
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatal(err)
-	}
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }

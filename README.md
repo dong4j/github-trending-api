@@ -1,246 +1,126 @@
-# GitHub Trending API (Go 版本)
+# Starcat Trending API
 
-> 使用 Go 语言重写的 GitHub Trending API，与 [Python 原版](https://github.com/doforce/github-trending) 保持 **100% 兼容** 的 REST API 接口。
+GitHub Trending API，使用 Go 语言实现。
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-supported-2496ED?style=flat&logo=docker)](Dockerfile)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+> **R-01 v1.2**（2026-06-09）：从无状态 HTML 爬虫升级为三层架构（spider → store → enricher → scheduler），加 Bearer Token 鉴权、Token Pool、SQLite 持久化，API 升级到 `/api/v1/*`。
 
-## ✨ 特性
+## 特性
 
-- 🚀 **零依赖框架**：使用 Go 标准库 `net/http`
-- 📦 **单二进制部署**：无运行时依赖
-- 🐳 **多架构 Docker**：`linux/amd64` + `linux/arm64`
-- ✅ **100% API 兼容**：与 Python 版本字段完全一致
-- 🔧 **易于扩展**：清晰的目录结构
-- 🤖 **CI/CD 就绪**：内置 GitHub Actions
+- **三层架构**：爬虫（goquery HTML 解析）→ SQLite 落库 → GitHub API 字段补全 → cron 定时调度
+- **Bearer Token 鉴权**：所有 `/api/v1/*` 和 `/internal/*` 端点强制鉴权
+- **Token Pool**：多 GitHub PAT 冗余 + Quota-aware 选择 + 故障切换
+- **Rate Limit 退避**：主动读 `X-RateLimit-Remaining` 头，低配额时自动减速
+- **优先级队列**：榜单前排优先 enrich（`enrich_priority DESC`）
+- **Admin endpoint**：手动触发同步（`/internal/sync/*`）
 
-## 📂 项目结构
+## 快速开始
+
+### 环境要求
+
+- Go 1.25+
+
+### 本地运行
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 API_KEYS 和 GITHUB_TOKENS
+cd starcat-trending-api
+go run ./cmd/server/
+```
+
+默认端口 `5002`。
+
+### .env 配置
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `PORT` | 服务端口 | `5002` |
+| `STORE_FILE` | SQLite 数据库路径 | `./trending.db` |
+| `API_KEYS` | Bearer Token 白名单（逗号分隔） | 必填 |
+| `GITHUB_TOKENS` | GitHub PAT 池（逗号分隔） | 必填 |
+
+## API 接口
+
+所有数据接口需要 `Authorization: Bearer <api-key>` 头。
+
+### `GET /api/v1/repos?lang=&since=&limit=`（需鉴权）
+
+返回 trending 仓库列表（含 GitHub API 补全字段）。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `lang` | string | — | 语言过滤（如 `Go`、`Python`） |
+| `since` | string | `daily` | `daily` / `weekly` / `monthly` |
+| `limit` | int | 100 | 返回数量上限（最大 100） |
+
+响应示例见 `internal/model/repo_card.go` 中的 `StarcatRepoCardDTO`。
+
+### `GET /api/v1/languages`（需鉴权）
+
+返回可用语言列表（24h 内存缓存）。
+
+### `GET /api/v1/users?lang=&since=&sponsorable=`（需鉴权）
+
+返回 trending 开发者列表。
+
+### Admin Endpoints（需鉴权）
+
+| 端点 | 说明 |
+|------|------|
+| `POST /internal/sync/repos` | 手动触发全量重爬 + enrich |
+| `POST /internal/sync/languages` | 手动刷��语言列表缓存 |
+| `POST /internal/sync/users` | 手动触发重爬开发者榜单 |
+
+### `GET /healthz`（公开）
+
+健康检查，返回 `ok`。
+
+## 鉴权
+
+所有 `/api/v1/*` 和 `/internal/*` 端点需要 `Authorization: Bearer <api-key>` 头。
+
+生成新 key：
+
+```bash
+bash ../scripts/gen-api-key.sh
+```
+
+## 项目结构
 
 ```
 starcat-trending-api/
-├── cmd/server/main.go          # HTTP 服务器入口
+├── cmd/server/main.go              # 入口：装配三层 + scheduler + 鉴权
 ├── internal/
-│   ├── models/models.go        # 数据模型定义
-│   └── spider/
-│       ├── base.go            # 爬虫基类 (HTTP 请求)
-│       ├── lang.go            # 语言列表爬虫
-│       ├── repo.go            # 仓库 trending 爬虫
-│       └── user.go            # 开发者 trending 爬虫
-├── pkg/utils/number.go         # 工具函数 (数字解析)
-├── .github/                    # GitHub 配置
-│   ├── ISSUE_TEMPLATE/         # Issue 模板
-│   ├── workflows/              # CI/CD
-│   ├── dependabot.yml          # 依赖更新
-│   └── PULL_REQUEST_TEMPLATE.md
-├── go.mod / go.sum            # Go 模块
-├── Dockerfile                 # 多阶段构建
-├── Makefile                   # 统一命令入口
-├── .gitignore / .gitattributes / .editorconfig
-├── CONTRIBUTING.md
-├── CODE_OF_CONDUCT.md
-├── SECURITY.md
-├── CHANGELOG.md
-└── README.md
+│   ├── spider/                     # HTML 爬虫（goquery）
+│   ├── store/                      # SQLite 持久化
+│   ├── enricher/                   # GitHub API 字段补全 + Rate Limit
+│   ├── tokenpool/                  # GitHub Token Pool
+│   ├── scheduler/                  # cron 定时调度
+│   ├── handler/                    # HTTP handler（v1 + admin）
+│   ├── middleware/                 # Bearer 鉴权中间件
+│   └── model/                      # 数据模型（DB + DTO + Envelope）
+├── .env.example                    # 配置模板
+├── fly.toml                        # Fly.io 部署配置
+├── Dockerfile
+└── Makefile
 ```
 
-## 🚀 快速开始
-
-### 方式 1：使用 Makefile（推荐）
+## 部署（Fly.io）
 
 ```bash
-# 查看所有可用命令
-make help
+fly secrets set \
+  API_KEYS="sk-starcat-prodKey1,sk-starcat-prodKey2" \
+  GITHUB_TOKENS="ghp_token1,ghp_token2,ghp_token3" \
+  STORE_FILE="/data/trending.db" \
+  -a starcat-trending-api
 
-# 开发模式运行
-make run
-
-# 编译
-make build
-
-# 完整检查
-make check
+fly deploy -a starcat-trending-api
 ```
 
-### 方式 2：直接使用 Go
+## 技术选型
 
-```bash
-go mod tidy
-go build -o bin/server ./cmd/server/
-./bin/server
-```
-
-### 方式 3：Docker
-
-```bash
-# 构建镜像
-make docker-build
-# 或
-docker build -t starcat-trending-api .
-
-# 运行
-make docker-run
-# 或
-docker run --rm -p 5002:5002 starcat-trending-api
-```
-
-服务器将在 `http://localhost:5002` 启动。
-
-## 📚 API 接口
-
-所有接口与 Python 原版保持 **完全一致**。
-
-### `GET /`
-
-欢迎信息
-
-```bash
-curl http://localhost:5002/
-```
-
-响应:
-```json
-{"message":"Hello GitHub trending"}
-```
-
-### `GET /lang`
-
-获取所有可用语言（约 814 种）
-
-```bash
-curl http://localhost:5002/lang
-```
-
-响应:
-```json
-[
-  {"label":"Unknown languages","key":"unknown"},
-  {"label":"Python","key":"python"},
-  {"label":"C#","key":"c%23"}
-]
-```
-
-### `GET /repo`
-
-获取 trending 仓库列表
-
-| 参数 | 类型   | 描述                                      |
-|------|--------|-------------------------------------------|
-| lang | string | 可选，语言过滤 (如 `python`, `go`, `java`)  |
-| since| string | 可选，默认 `daily`，可选: `daily`/`weekly`/`monthly` |
-
-```bash
-# 所有语言的每日 trending
-curl "http://localhost:5002/repo"
-
-# Python 的每周 trending
-curl "http://localhost:5002/repo?lang=python&since=weekly"
-```
-
-响应: (最多 25 条)
-```json
-[
-  {
-    "repo": "/StarRocks/starrocks",
-    "desc": "StarRocks 描述...",
-    "lang": "Java",
-    "stars": 6338,
-    "forks": 1437,
-    "build_by": [
-      {"avatar": "https://avatars.githubusercontent.com/...", "by": "/amber-create"}
-    ],
-    "change": 619
-  }
-]
-```
-
-### `GET /user`
-
-获取 trending 开发者列表
-
-| 参数        | 类型   | 描述                                              |
-|-------------|--------|--------------------------------------------------|
-| lang        | string | 可选，语言过滤                                    |
-| since       | string | 可选，默认 `daily`，可选: `daily`/`weekly`/`monthly` |
-| sponsorable | string | 可选，`"1"` 表示仅显示有赞助选项的开发者             |
-
-```bash
-curl "http://localhost:5002/user?lang=python&since=weekly"
-```
-
-响应: (最多 25 条)
-```json
-[
-  {
-    "avatar": "https://avatars.githubusercontent.com/u/322311?s=96&v=4",
-    "name": "Ben McCann",
-    "github_name": "/benmccann",
-    "popular": {
-      "repo": "/benmccann/NameMatching",
-      "desc": "MITRE's name matching competition"
-    }
-  }
-]
-```
-
-## 🆚 对比原版 (Python)
-
-| 特性         | Python 原版           | Go 版本                    |
-|--------------|----------------------|----------------------------|
-| Web 框架     | FastAPI              | 标准库 `net/http`           |
-| HTML 解析    | parsel + Scrapy      | goquery                    |
-| 依赖数量     | 5 个包               | 1 个库                      |
-| 并发         | 异步                 | goroutine (原生)            |
-| 部署         | Vercel / Docker      | 单二进制 / Docker            |
-| 启动时间     | 数百毫秒              | < 10ms                      |
-| 内存占用     | ~50MB+               | ~5MB                        |
-
-## 🛠 技术选型说明
-
-- **net/http**: 使用 Go 标准库，无需额外框架依赖
-- **goquery**: 类似于 Python 的 `parsel`，选择器语法相似
-- **无反射 ORM**: 直接使用 `encoding/json`，无性能损耗
-
-## ☁️ 部署
-
-支持多种免费云平台部署：
-
-| 平台 | 永久免费 | 不休眠 | 难度 | 适用场景 |
-|------|---------|--------|------|---------|
-| 🏆 [Fly.io](docs/DEPLOY_FLY.md) | ✅ | ✅ | ⭐⭐ | **海外访问快、长期运行** |
-| [Render](docs/DEPLOY_RENDER.md) | ⚠️ 有限制 | ❌ 15 分钟休眠 | ⭐ | 演示、GitHub 集成 |
-| Oracle Cloud | ✅ | ✅ | ⭐⭐⭐ | 国内访问稳定 |
-| Railway | ❌ $5 试用 | ✅ | ⭐ | 简单测试 |
-
-### 🚀 快速部署到 Fly.io
-
-```bash
-brew install flyctl  # 安装 CLI
-fly auth signup       # 注册（需信用卡验证，不扣费）
-fly launch            # 一键部署
-fly open              # 打开应用
-```
-
-详细步骤见 [docs/DEPLOY_FLY.md](docs/DEPLOY_FLY.md)。
-
-### 🚀 快速部署到 Render
-
-1. 在 Render Dashboard 点击 **New** → **Blueprint**
-2. 连接 `dong4j/starcat-trending-api` 仓库
-3. Render 自动读取 `render.yaml` 并部署
-
-详细步骤见 [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md)。
-
-## 🤝 贡献
-
-欢迎贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解贡献流程。
-
-## 📜 许可证
-
-本项目基于 MIT 协议开源 - 详见 [LICENSE](LICENSE) 文件。
-
-## 🙏 致谢
-
-- 原 Python 版本作者：[Edgar Xie](https://github.com/doforce)
-- HTML 解析：[goquery](https://github.com/PuerkitoBio/goquery)
+- **net/http**：Go 标准库，无框架依赖
+- **goquery**：HTML 解析（类 jQuery 选择器）
+- **SQLite**：modernc.org/sqlite（纯 Go，无 CGO）
+- **cron**：robfig/cron/v3（定时调度）
+- **godotenv**：.env 文件加载

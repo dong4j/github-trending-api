@@ -15,6 +15,11 @@ primary_region = 'nrt'
   GOMAXPROCS = '1'
   PORT = '5002'
 
+# R-01 v1.2: 敏感配置迁到 fly secrets
+# STORE_FILE → fly secrets set STORE_FILE=/data/trending.db
+# API_KEYS  → fly secrets set API_KEYS=...
+# GITHUB_TOKENS → fly secrets set GITHUB_TOKENS=...
+
 [processes]
   app = './server'
 
