@@ -71,13 +71,24 @@ func migrateV1(db *sql.DB) error {
 			enriched_at     TEXT,
 			is_available    INTEGER NOT NULL DEFAULT 1,
 			enrich_priority INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (full_name, since)
+			-- v0.4 source 维度
+			source              TEXT NOT NULL DEFAULT 'github',
+			description_zh      TEXT,
+			zread_week_start    TEXT,
+			zread_week_end      TEXT,
+			zread_week_label    TEXT,
+			zread_rank_in_week  INTEGER,
+			zread_wiki_id       TEXT,
+			zread_week_start_raw TEXT,
+			zread_week_end_raw   TEXT,
+			zread_year_inferred  INTEGER,
+			PRIMARY KEY (full_name, since, source)
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_trending_since_captured ON trending_repos(since, captured_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_trending_lookup ON trending_repos(source, since, captured_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_trending_gh_repo_id ON trending_repos(gh_repo_id) WHERE gh_repo_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_trending_unenriched ON trending_repos(enriched_at) WHERE enriched_at IS NULL AND is_available = 1;
-		CREATE INDEX IF NOT EXISTS idx_trending_language_since ON trending_repos(language, since, captured_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_trending_language_since ON trending_repos(source, language, since, captured_at DESC);
 
 		CREATE TABLE IF NOT EXISTS trending_languages (
 			key         TEXT PRIMARY KEY,
@@ -95,3 +106,4 @@ func migrateV1(db *sql.DB) error {
 
 	return tx.Commit()
 }
+

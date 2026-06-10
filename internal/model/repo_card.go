@@ -43,8 +43,10 @@ type StarcatRepoCardDTO struct {
 type TrendingExtension struct {
 	Change       int                   `json:"change"`
 	Contributors []TrendingContributor `json:"contributors"`
+	// v0.4
+	DescriptionZh *string `json:"description_zh,omitempty"`
+	ZreadWikiID   *string `json:"zread_wiki_id,omitempty"`
 }
-
 // TrendingContributor 贡献者简要信息。
 type TrendingContributor struct {
 	Avatar string `json:"avatar"`

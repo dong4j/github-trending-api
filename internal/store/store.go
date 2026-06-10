@@ -14,20 +14,19 @@ type Store interface {
 	// UpsertRepo 按 full_name + since 幂等 upsert。
 	UpsertRepo(repo model.TrendingRepo) error
 
-	// GetRepos 按 since / lang / limit 查询 repo 列表。
-	GetRepos(since, lang string, limit int) ([]model.TrendingRepo, error)
-
+	// GetRepos 按 since / lang / source / limit 查询 repo 列表。
+	GetRepos(since, lang, source string, limit int) ([]model.TrendingRepo, error)
 	// GetUnenrichedRepos 获取待 enrich 的 repo（按 priority desc）。
 	GetUnenrichedRepos(limit int) ([]model.TrendingRepo, error)
 
 	// UpdateEnriched 写入 enricher 补全字段 + 标记 enriched_at。
-	UpdateEnriched(fullName, since string, repo model.TrendingRepo) error
+	UpdateEnriched(fullName, since, source string, repo model.TrendingRepo) error
 
 	// MarkUnavailable 标记 repo 不可用（404）。
-	MarkUnavailable(fullName, since string) error
+	MarkUnavailable(fullName, since, source string) error
 
 	// RecomputePriorities 重新计算 enrich 优先级。
-	RecomputePriorities(since string) error
+	RecomputePriorities(since, source string) error
 
 	// --- Languages ---
 

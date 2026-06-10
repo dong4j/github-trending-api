@@ -44,13 +44,6 @@ type githubRepoResponse struct {
 }
 
 // Enricher 管理 GitHub API 字段补全。
-//
-// inflight 字段 (R-01 v1.2 §4.2): 防止「EnrichQueue 2 worker 并发 + scheduler
-// 定时调 EnrichAll」时，同一个 (full_name, since) 被多个调用方同时 enrich，
-// 浪费 GitHub API quota 的 race。
-//   - GetUnenrichedRepos 本身没有 row lock；
-//   - EnrichOne 中 HTTP 调用窗口可能长达 1-2s，足以让另一个 worker 拿到同一行；
-//   - 通过 in-process map 跟踪正在处理的 key，第二个调用方直接 skip。
 type Enricher struct {
 	store     store.Store
 	pool      *tokenpool.Pool
@@ -59,7 +52,7 @@ type Enricher struct {
 	workerCnt int
 
 	inflightMu sync.Mutex
-	inflight   map[string]bool // key = full_name + "@" + since
+	inflight   map[string]bool // key = full_name + "@" + since + "@" + source
 }
 
 // New 创建 Enricher。
@@ -75,9 +68,8 @@ func New(s store.Store, p *tokenpool.Pool, rl *RateLimitHandler) *Enricher {
 }
 
 // tryAcquire 尝试占用某个 repo 的 enrich 处理权。
-// 返回 false 表示已有别的 worker 在处理，调用方应跳过。
 func (e *Enricher) tryAcquire(repo *model.TrendingRepo) bool {
-	key := repo.FullName + "@" + repo.Since
+	key := repo.FullName + "@" + repo.Since + "@" + repo.Source
 	e.inflightMu.Lock()
 	defer e.inflightMu.Unlock()
 	if e.inflight[key] {
@@ -89,7 +81,7 @@ func (e *Enricher) tryAcquire(repo *model.TrendingRepo) bool {
 
 // release 释放占用（必须 defer 调用）。
 func (e *Enricher) release(repo *model.TrendingRepo) {
-	key := repo.FullName + "@" + repo.Since
+	key := repo.FullName + "@" + repo.Since + "@" + repo.Source
 	e.inflightMu.Lock()
 	delete(e.inflight, key)
 	e.inflightMu.Unlock()
@@ -97,7 +89,6 @@ func (e *Enricher) release(repo *model.TrendingRepo) {
 
 // EnrichAll 全量 enrich 所有待处理 repo。
 func (e *Enricher) EnrichAll() {
-	offset := 0
 	batchSize := 30
 	enriched := 0
 
@@ -118,7 +109,6 @@ func (e *Enricher) EnrichAll() {
 			}
 			enriched++
 		}
-		offset += len(repos)
 		if enriched%100 == 0 {
 			alive, dead, remaining, _ := e.pool.Stats()
 			log.Printf("[enricher] progress: %d enriched | [token-pool] alive=%d dead=%d remaining=%d",
@@ -130,9 +120,6 @@ func (e *Enricher) EnrichAll() {
 }
 
 // EnrichOne 单 repo enrich，最多重试 3 次。
-//
-// double-enrich 防御 (R-01 §4.2)：函数顶部 tryAcquire，如已被另一个调用方占用，
-// 直接返回 nil（视为 no-op 而非 error，不影响调用方计数）。
 func (e *Enricher) EnrichOne(repo *model.TrendingRepo) error {
 	if !e.tryAcquire(repo) {
 		return nil
@@ -179,18 +166,17 @@ func (e *Enricher) EnrichOne(repo *model.TrendingRepo) error {
 			resp.Body.Close()
 
 			updated := buildEnrichedRepo(repo, &gh)
-			if err := e.store.UpdateEnriched(repo.FullName, repo.Since, updated); err != nil {
+			if err := e.store.UpdateEnriched(repo.FullName, repo.Since, repo.Source, updated); err != nil {
 				return fmt.Errorf("update enriched: %w", err)
 			}
 			return nil
 
 		case 404:
 			resp.Body.Close()
-			_ = e.store.MarkUnavailable(repo.FullName, repo.Since)
+			_ = e.store.MarkUnavailable(repo.FullName, repo.Since, repo.Source)
 			return nil
 
 		case 401:
-			// TokenPool 已标 dead，重试自动用下一个
 			resp.Body.Close()
 			continue
 

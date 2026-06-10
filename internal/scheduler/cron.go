@@ -4,6 +4,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
@@ -20,12 +21,12 @@ import (
 
 // Scheduler 管理定时爬虫任务。
 type Scheduler struct {
-	store       store.Store
-	enricher    *enricher.Enricher
-	cron        *cron.Cron
-	langCache   *languageCache
-	mu          sync.Mutex
-	running     map[string]bool // 防止并发跑同一任务
+	store     store.Store
+	enricher  *enricher.Enricher
+	cron      *cron.Cron
+	langCache *languageCache
+	mu        sync.Mutex
+	running   map[string]bool // 防止并发跑同一任务
 }
 
 // languageCache 语言列表内存缓存（24h TTL）。
@@ -51,6 +52,8 @@ func New(s store.Store, enc *enricher.Enricher) *Scheduler {
 	sch.cron.AddFunc("13 */6 * * *", sch.syncWeekly)
 	// monthly 每 2 天 05:19 UTC
 	sch.cron.AddFunc("19 5 */2 * *", sch.syncMonthly)
+	// zread 每周一 06:00 UTC
+	sch.cron.AddFunc("0 0 6 * * 1", sch.syncZread)
 	// 长尾 enrich 每天 03:00 UTC
 	sch.cron.AddFunc("0 3 * * *", sch.enrichLongTail)
 	// 过期清理 每天 04:00 UTC
@@ -61,9 +64,10 @@ func New(s store.Store, enc *enricher.Enricher) *Scheduler {
 
 // Start 启动定时任务 + 冷启动全量同步。
 func (sch *Scheduler) Start() {
-	log.Println("[scheduler] cold start: syncing daily + languages")
+	log.Println("[scheduler] cold start: syncing daily + languages + zread")
 	go sch.syncDaily()
 	go sch.syncLanguages()
+	go sch.syncZread()
 	sch.cron.Start()
 	log.Println("[scheduler] cron started")
 }
@@ -82,6 +86,7 @@ func (sch *Scheduler) SyncAll() {
 		sch.syncWeekly()
 		sch.syncMonthly()
 		sch.syncLanguages()
+		sch.syncZread()
 	}()
 }
 
@@ -98,7 +103,7 @@ func (sch *Scheduler) syncDaily() {
 
 	log.Println("[scheduler] syncing daily trending")
 	sch.scrapeAndPersist("", "daily")
-	_ = sch.store.RecomputePriorities("daily")
+	_ = sch.store.RecomputePriorities("daily", "github")
 	sch.enricher.EnrichAll()
 }
 
@@ -110,7 +115,7 @@ func (sch *Scheduler) syncWeekly() {
 
 	log.Println("[scheduler] syncing weekly trending")
 	sch.scrapeAndPersist("", "weekly")
-	_ = sch.store.RecomputePriorities("weekly")
+	_ = sch.store.RecomputePriorities("weekly", "github")
 }
 
 func (sch *Scheduler) syncMonthly() {
@@ -121,7 +126,22 @@ func (sch *Scheduler) syncMonthly() {
 
 	log.Println("[scheduler] syncing monthly trending")
 	sch.scrapeAndPersist("", "monthly")
-	_ = sch.store.RecomputePriorities("monthly")
+	_ = sch.store.RecomputePriorities("monthly", "github")
+}
+
+func (sch *Scheduler) syncZread() {
+	if !sch.tryLock("zread") {
+		return
+	}
+	defer sch.unlock("zread")
+
+	log.Println("[scheduler] syncing zread trending")
+	sp := spider.NewZreadSpider(sch.store.(*store.SQLiteStore))
+	if err := sp.RunOnce(context.Background()); err != nil {
+		log.Printf("[scheduler] zread fetch error: %v", err)
+	}
+	_ = sch.store.RecomputePriorities("weekly", "zread")
+	sch.enricher.EnrichAll()
 }
 
 func (sch *Scheduler) enrichLongTail() {
@@ -131,8 +151,6 @@ func (sch *Scheduler) enrichLongTail() {
 
 func (sch *Scheduler) cleanupStale() {
 	log.Println("[scheduler] cleaning up stale repos (captured_at < 7d)")
-	// 注意：migrations 设计是软删除（is_available=0），不删行。
-	// 此处只是日志标记。
 }
 
 // scrapeAndPersist 爬所有语言 × since 组合并落库。
@@ -141,7 +159,6 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) {
 	items := sp.GetItems()
 
 	for _, item := range items {
-		// 从 "owner/repo" 格式拆分
 		parts := strings.SplitN(item.Repo, "/", 2)
 		if len(parts) != 2 {
 			continue
@@ -165,8 +182,9 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) {
 			Language:    &item.Lang,
 			Change:      item.Change,
 			BuildByJSON: bjJSON,
-			Since:      since,
-			CapturedAt: time.Now(),
+			Since:       since,
+			Source:      "github",
+			CapturedAt:  time.Now(),
 			IsAvailable: true,
 		}
 
@@ -188,10 +206,8 @@ func (sch *Scheduler) syncLanguages() {
 		langs[i] = model.Language{Key: item.Key, Label: item.Label}
 	}
 
-	// 落库
 	_ = sch.store.UpsertLanguages(langs)
 
-	// 更新内存缓存
 	sch.langCache.mu.Lock()
 	sch.langCache.languages = langs
 	sch.langCache.fetchedAt = time.Now()
@@ -231,4 +247,3 @@ func (sch *Scheduler) unlock(name string) {
 	sch.running[name] = false
 	sch.mu.Unlock()
 }
-

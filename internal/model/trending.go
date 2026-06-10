@@ -8,15 +8,15 @@ import "time"
 
 // TrendingRepo 是 trending_repos 表中一条记录的 Go 表示。
 type TrendingRepo struct {
-	FullName     string
-	Owner        string
-	Name         string
-	DescText     *string // 爬虫原始描述
-	Stars        int
-	Forks        int
-	Language     *string
-	Change       int
-	BuildByJSON  *string // contributors JSON array
+	FullName    string
+	Owner       string
+	Name        string
+	DescText    *string // 爬虫原始描述
+	Stars       int
+	Forks       int
+	Language    *string
+	Change      int
+	BuildByJSON *string // contributors JSON array
 
 	// enricher 补全字段
 	GhRepoID      *int64
@@ -42,8 +42,21 @@ type TrendingRepo struct {
 	EnrichedAt     *time.Time
 	IsAvailable    bool
 	EnrichPriority int
-}
 
+	// v0.4 source 维度
+	Source string // github|zread
+
+	// zread 独有
+	DescriptionZh     *string
+	ZreadWeekStart    *string
+	ZreadWeekEnd      *string
+	ZreadWeekLabel    *string
+	ZreadRankInWeek   int
+	ZreadWikiID       *string
+	ZreadWeekStartRaw *string
+	ZreadWeekEndRaw   *string
+	ZreadYearInferred int
+}
 // Language 语言列表项。
 type Language struct {
 	Key   string `json:"key"`
