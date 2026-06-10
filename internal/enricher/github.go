@@ -52,7 +52,7 @@ type Enricher struct {
 	workerCnt int
 
 	inflightMu sync.Mutex
-	inflight   map[string]bool // key = full_name + "@" + since + "@" + source
+	inflight   map[string]bool // key = full_name + "@" + since
 }
 
 // New 创建 Enricher。
@@ -68,8 +68,10 @@ func New(s store.Store, p *tokenpool.Pool, rl *RateLimitHandler) *Enricher {
 }
 
 // tryAcquire 尝试占用某个 repo 的 enrich 处理权。
+//
+// 防止并发跑同一 repo 的 enrich（enrich 自身并发安全，但 GitHub API rate limit 宝贵）。
 func (e *Enricher) tryAcquire(repo *model.TrendingRepo) bool {
-	key := repo.FullName + "@" + repo.Since + "@" + repo.Source
+	key := repo.FullName + "@" + repo.Since
 	e.inflightMu.Lock()
 	defer e.inflightMu.Unlock()
 	if e.inflight[key] {
@@ -81,7 +83,7 @@ func (e *Enricher) tryAcquire(repo *model.TrendingRepo) bool {
 
 // release 释放占用（必须 defer 调用）。
 func (e *Enricher) release(repo *model.TrendingRepo) {
-	key := repo.FullName + "@" + repo.Since + "@" + repo.Source
+	key := repo.FullName + "@" + repo.Since
 	e.inflightMu.Lock()
 	delete(e.inflight, key)
 	e.inflightMu.Unlock()
@@ -166,14 +168,14 @@ func (e *Enricher) EnrichOne(repo *model.TrendingRepo) error {
 			resp.Body.Close()
 
 			updated := buildEnrichedRepo(repo, &gh)
-			if err := e.store.UpdateEnriched(repo.FullName, repo.Since, repo.Source, updated); err != nil {
+			if err := e.store.UpdateEnriched(repo.FullName, repo.Since, updated); err != nil {
 				return fmt.Errorf("update enriched: %w", err)
 			}
 			return nil
 
 		case 404:
 			resp.Body.Close()
-			_ = e.store.MarkUnavailable(repo.FullName, repo.Since, repo.Source)
+			_ = e.store.MarkUnavailable(repo.FullName, repo.Since)
 			return nil
 
 		case 401:

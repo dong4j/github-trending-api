@@ -40,12 +40,12 @@ type StarcatRepoCardDTO struct {
 }
 
 // TrendingExtension trending 场景发现型字段。
+//
+// R-02 v0.2（2026-06-10）：删 v0.3 引入的 zread 字段（DescriptionZh / ZreadWikiID）。
+// trending-api 重新收敛到 GitHub 单源数据；zread 数据已迁到 weekly-api。
 type TrendingExtension struct {
 	Change       int                   `json:"change"`
 	Contributors []TrendingContributor `json:"contributors"`
-	// v0.4
-	DescriptionZh *string `json:"description_zh,omitempty"`
-	ZreadWikiID   *string `json:"zread_wiki_id,omitempty"`
 }
 // TrendingContributor 贡献者简要信息。
 type TrendingContributor struct {

@@ -1,12 +1,13 @@
 # Starcat Trending API
 
-GitHub Trending API，使用 Go 语言实现。
+GitHub Trending 数据 API，使用 Go 语言实现，输出统一 envelope 格式。
 
-> **R-01 v1.2**（2026-06-09）：从无状态 HTML 爬虫升级为三层架构（spider → store → enricher → scheduler），加 Bearer Token 鉴权、Token Pool、SQLite 持久化，API 升级到 `/api/v1/*`。
+> trending-api **只走 GitHub 单源**。zread 周榜数据由 [`starcat-weekly-api`](../starcat-weekly-api/)
+> 的 `GET /api/v1/trending/zread` 提供，不在本服务暴露。
 
 ## 特性
 
-- **三层架构**：爬虫（goquery HTML 解析）→ SQLite 落库 → GitHub API 字段补全 → cron 定时调度
+- **三层架构**：spider（HTML 爬虫）→ store（SQLite）→ enricher（GitHub API 补全）
 - **Bearer Token 鉴权**：所有 `/api/v1/*` 和 `/internal/*` 端点强制鉴权
 - **Token Pool**：多 GitHub PAT 冗余 + Quota-aware 选择 + 故障切换
 - **Rate Limit 退避**：主动读 `X-RateLimit-Remaining` 头，低配额时自动减速
@@ -51,8 +52,10 @@ go run ./cmd/server/
 |------|------|--------|------|
 | `lang` | string | — | 语言过滤（如 `Go`、`Python`） |
 | `since` | string | `daily` | `daily` / `weekly` / `monthly` |
-| `source`| string | `github`| 数据源：`github` / `zread` (仅限 weekly) / `merged` (双榜合并) |
 | `limit` | int | 100 | 返回数量上限（最大 100） |
+
+**注意**：不接受 `source=*` 参数。trending-api 固定走 GitHub 单源；zread 数据请改用
+weekly-api `GET /api/v1/trending/zread`。
 
 响应示例见 `internal/model/repo_card.go` 中的 `StarcatRepoCardDTO`。
 
@@ -69,7 +72,7 @@ go run ./cmd/server/
 | 端点 | 说明 |
 |------|------|
 | `POST /internal/sync/repos` | 手动触发全量重爬 + enrich |
-| `POST /internal/sync/languages` | 手动刷��语言列表缓存 |
+| `POST /internal/sync/languages` | 手动刷新语言列表缓存 |
 | `POST /internal/sync/users` | 手动触发重爬开发者榜单 |
 
 ### `GET /healthz`（公开）

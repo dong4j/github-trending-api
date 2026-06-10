@@ -1,10 +1,9 @@
 // Package scheduler 提供榜单定时刷新 + 增量 enrich。
 //
-// R-01 v1.2: cron 驱动爬虫 → 落库 → enricher 补全。
+// cron 驱动爬虫 → 落库 → enricher 补全。
 package scheduler
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"strings"
@@ -52,8 +51,6 @@ func New(s store.Store, enc *enricher.Enricher) *Scheduler {
 	sch.cron.AddFunc("13 */6 * * *", sch.syncWeekly)
 	// monthly 每 2 天 05:19 UTC
 	sch.cron.AddFunc("19 5 */2 * *", sch.syncMonthly)
-	// zread 每周一 06:00 UTC
-	sch.cron.AddFunc("0 0 6 * * 1", sch.runZreadFetch)
 	// 长尾 enrich 每天 03:00 UTC
 	sch.cron.AddFunc("0 3 * * *", sch.enrichLongTail)
 	// 过期清理 每天 04:00 UTC
@@ -64,10 +61,9 @@ func New(s store.Store, enc *enricher.Enricher) *Scheduler {
 
 // Start 启动定时任务 + 冷启动全量同步。
 func (sch *Scheduler) Start() {
-	log.Println("[scheduler] cold start: syncing daily + languages + zread")
+	log.Println("[scheduler] cold start: syncing daily + languages")
 	go sch.syncDaily()
 	go sch.syncLanguages()
-	go sch.runZreadFetch()
 	sch.cron.Start()
 	log.Println("[scheduler] cron started")
 }
@@ -86,7 +82,6 @@ func (sch *Scheduler) SyncAll() {
 		sch.syncWeekly()
 		sch.syncMonthly()
 		sch.syncLanguages()
-		sch.runZreadFetch()
 	}()
 }
 
@@ -103,7 +98,7 @@ func (sch *Scheduler) syncDaily() {
 
 	log.Println("[scheduler] syncing daily trending")
 	sch.scrapeAndPersist("", "daily")
-	_ = sch.store.RecomputePriorities("daily", "github")
+	_ = sch.store.RecomputePriorities("daily")
 	sch.enricher.EnrichAll()
 }
 
@@ -115,7 +110,7 @@ func (sch *Scheduler) syncWeekly() {
 
 	log.Println("[scheduler] syncing weekly trending")
 	sch.scrapeAndPersist("", "weekly")
-	_ = sch.store.RecomputePriorities("weekly", "github")
+	_ = sch.store.RecomputePriorities("weekly")
 }
 
 func (sch *Scheduler) syncMonthly() {
@@ -126,22 +121,7 @@ func (sch *Scheduler) syncMonthly() {
 
 	log.Println("[scheduler] syncing monthly trending")
 	sch.scrapeAndPersist("", "monthly")
-	_ = sch.store.RecomputePriorities("monthly", "github")
-}
-
-func (sch *Scheduler) runZreadFetch() {
-	if !sch.tryLock("zread") {
-		return
-	}
-	defer sch.unlock("zread")
-
-	log.Println("[scheduler] syncing zread trending")
-	sp := spider.NewZreadSpider(sch.store.(*store.SQLiteStore))
-	if err := sp.RunOnce(context.Background()); err != nil {
-		log.Printf("[scheduler] zread fetch error: %v", err)
-	}
-	_ = sch.store.RecomputePriorities("weekly", "zread")
-	sch.enricher.EnrichAll()
+	_ = sch.store.RecomputePriorities("monthly")
 }
 
 func (sch *Scheduler) enrichLongTail() {
@@ -183,7 +163,6 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) {
 			Change:      item.Change,
 			BuildByJSON: bjJSON,
 			Since:       since,
-			Source:      "github",
 			CapturedAt:  time.Now(),
 			IsAvailable: true,
 		}

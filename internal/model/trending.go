@@ -7,6 +7,9 @@ package model
 import "time"
 
 // TrendingRepo 是 trending_repos 表中一条记录的 Go 表示。
+//
+// R-02 v0.2（2026-06-10）：删 v0.3 引入的 zread 维度（9 字段）+ Source 字段。
+// trending-api 重新收敛到 GitHub 单源数据；zread 数据已迁到 weekly-api。
 type TrendingRepo struct {
 	FullName    string
 	Owner       string
@@ -42,20 +45,6 @@ type TrendingRepo struct {
 	EnrichedAt     *time.Time
 	IsAvailable    bool
 	EnrichPriority int
-
-	// v0.4 source 维度
-	Source string // github|zread
-
-	// zread 独有
-	DescriptionZh     *string
-	ZreadWeekStart    *string
-	ZreadWeekEnd      *string
-	ZreadWeekLabel    *string
-	ZreadRankInWeek   int
-	ZreadWikiID       *string
-	ZreadWeekStartRaw *string
-	ZreadWeekEndRaw   *string
-	ZreadYearInferred int
 }
 // Language 语言列表项。
 type Language struct {

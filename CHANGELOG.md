@@ -7,17 +7,73 @@
 
 ## [Unreleased]
 
-## [2.1.0] - 2026-06-10
+## [0.1.1] - 2026-06-10
+
+补齐 v0.1.0 全新服务单测基线（0 项 → 75 项 case 全绿）。
 
 ### Added
-- **R-02 (Zread Integration)**：引入 Zread Trending 数据源。
-- **Source 维度合并**：`GET /api/v1/repos?source=merged` 提供 GitHub 与 Zread 双榜合并去重能力。
-- **Zread 扩展字段**：在 trending 扩展段中增加 `description_zh` 和 `zread_wiki_id` 等字段。
+- **`internal/store/store_test.go`**：11 case
+  - 4 索引存在性 + UpsertRepo 幂等（同 (full_name, since) 二次写入更新）
+  - GetRepos 多条件过滤（since / lang / is_available / enriched_at）+ limit 默认 100
+  - GetUnenrichedRepos 倒序按 priority
+  - UpdateEnriched 字段映射 + stars 单调递增保护（CASE WHEN）
+  - MarkUnavailable 翻转 is_available
+  - RecomputePriorities 三档：top30=100, next70=50, 其余=10
+  - UpsertLanguages 事务覆写 + GetLanguages 按 label 排序
+  - queryRepos Scan 全 24 字段端到端往返（17 enricher 字段 + 7 基础字段）
+  - Close 后再操作报错
+- **`internal/handler/handler_test.go`**：11 case
+  - writeJSON / writeJSONWithMeta envelope JSON 字段对齐 + omitempty
+  - writeError 6 种 HTTP status code 透传 + ErrorEnvelope 序列化
+  - details=nil 不输出 details 字段
+- **`internal/handler/repos_test.go`**：15 case
+  - 7 个 query 场景（默认 since / 3 个合法 since / since 非法 / source 拒绝 ×3 / lang 透传 / limit clamp / limit 正常值）
+  - cacheStatus fresh/cold
+  - 内部 store 错误 → 500
+  - TrendingRepo → StarcatRepoCardDTO 字段映射（含 contributors 解析 + `/` 前缀去除）
+  - description 空时回退到 desc_text
+  - 用 fakeStore 实现 store.Store interface（10 个方法,只走 GetRepos 路径）
+- **`internal/middleware/auth_test.go`**：10 case
+  - NewBearerAuth 跳过空 key / 全空白 key
+  - 缺 Authorization / 错前缀（Basic/Token/bearer 小写） / 错 key / 通过
+  - 多个 key 注册,任一合法都通过
+  - token 前后空白被 trim
+  - maskKey 短/16/长字符串三种长度
+- **`internal/enricher/ratelimit_test.go`**：7 case
+  - Wait 第一次不 sleep / 第二次 sleep 补齐 / 间隔够远不 sleep
+  - Pause 期间 sleep / Pause 已过期立即返回 / Reset 清空 pausedUntil
+  - 5 worker 并发 Wait 总时间 ≈ (N-1) × minInterval（漏桶语义）
+- **`internal/enricher/queue_test.go`**：7 case
+  - NewEnrichQueue workerCnt <= 0 走默认 2
+  - Start 启动 worker + Stop 关闭
+  - 重复 Start 幂等（不启两轮 worker）
+  - Stop 在没 Start 时不 panic
+  - Stats 初始 0
+  - Start + Stop 并发不竞态
+  - 用临时 SQLite store 构造最小 EnrichQueue
+- **`internal/tokenpool/tokenpool_test.go`**：15 case
+  - New 跳过空 / 全空白
+  - PickBest 5 场景（全 dead / 一活多死 / unknown 优先 / 选 max / exhausted 跳过 / reset 已过重新可用）
+  - UpdateFromResponse 解析 X-RateLimit-Remaining/Reset / 401 翻 Dead / 5xx 累计 5 次翻 Dead / 2xx 复位 / 4xx 不累计
+  - EarliestReset 选 alive 中最早 / 全部 dead 或 zero reset 返 zero
+  - Stats alive/dead/totalRemaining 计数
+  - maskToken 三长度 / trimSpace 五种空白
 
-## [2.0.0] - 2026-06-09
+### Notes
+- 5 包 build/vet/test 全绿（store / handler / middleware / enricher / tokenpool）；cmd / model / scheduler / spider / version / pkg/utils 暂未加测试,理由：
+  - **cmd / version**：纯 main 入口或常量包,无可测逻辑
+  - **model**：纯数据结构,字段往返由 store 测覆盖
+  - **scheduler**：依赖 spider + store + enricher 完整链,e2e curl 已验证
+  - **spider**：依赖真实 GitHub HTML,需 mock HTTP server + HTML fixture,优先级低
+- 用 `t.TempDir()` + `NewSQLiteStore` 起临时 SQLite db,测试结束自动清理,互不污染
+- 部分子测试用 `t.Run` 共享 setup,共 **75 项**子测试 + **5 包**全绿
+
+## [0.1.0] - 2026-06-10
+
+starcat-trending-api 首版（Go 重写 + GitHub Trending 单源）。
 
 ### Added
-- **三层架构**：spider（爬虫）→ store（SQLite）→ enricher（GitHub API 补全）
+- **三层架构**：spider（GitHub Trending 爬虫）→ store（SQLite）→ enricher（GitHub API 补全）
 - **SQLite 持久化**：`trending_repos` + `trending_languages` 表，WAL 模式
 - **GitHub API Enricher**：补全 `gh_repo_id`、topics、license、owner_avatar 等 18 个字段
 - **Token Pool**：多 GitHub PAT 冗余 + Quota-aware `PickBest()` + 故障切换
@@ -29,42 +85,31 @@
 - **Envelope 统一响应**：`schema_version` + `data` / `error` + `meta`
 - **`.env` 配置**：godotenv 加载，敏感值走 fly secrets
 
-### Changed
-- **Breaking**: `GET /repo` → `GET /api/v1/repos`（旧路径直接删除，含 envelope）
-- **Breaking**: `GET /lang` → `GET /api/v1/languages`
-- **Breaking**: `GET /user` → `GET /api/v1/users`
-- **Breaking**: 所有端点（除 `/healthz`）需 Bearer Token
-- **Breaking**: 响应格式升级为 envelope（嵌套 `data` / `error`）
-- `internal/models/` → `internal/model/` + spider 类型迁入 `internal/spider/types.go`
+### API
+- `GET /healthz` - 健康检查（无需鉴权）
+- `GET /api/v1/repos?since=daily|weekly|monthly&lang=&limit=` - 仓库卡片列表
+- `GET /api/v1/languages` - 语言列表
+- `GET /api/v1/users?sponsorable=true` - 趋势贡献者
+- `POST /internal/sync/{repos,languages,users}` - 手动触发同步
 
-### Removed
-- `GET /` 欢迎端点
-- `GET /lang`、`GET /repo`、`GET /user` 旧端点
-- `internal/models/models.go`（类型迁至 spider 包）
+### 数据来源
+- **trending-api 只走 GitHub 单源**。zread 数据由 `starcat-weekly-api` 的
+  `GET /api/v1/trending/zread` 提供，不在 trending-api 暴露。
 
-## [1.0.0] - 2026-06-08
+### Notes
+- 当前 `GET /api/v1/repos` 显式拒绝 `source=*` 参数（400），引导客户端去 weekly-api 取 zread。
+- 跨项目 envelope 共享约定已解除：sharing / weekly / wiki / trending 各 API 的 `Meta`
+  字段由各 API 自治，不再做跨项目 byte-level 一致性检查。
 
-### Added
-- Go 语言重写版本（基于 [Python 原版](https://github.com/doforce/github-trending)）
-- 标准库 `net/http` 实现 REST API
-- 使用 `goquery` 进行 HTML 解析
-- Docker 多阶段构建（`linux/amd64` + `linux/arm64`）
-- GitHub Actions CI（Go 构建 + Docker 镜像）
-- Dependabot 自动依赖更新
-- Issue / PR 模板
-- Security 政策
-- 内部版本号包 (`internal/version`, 暴露 `version.Version` 常量)
+---
 
-### Changed
-- **重写**：从 Python/FastAPI 重写为 Go
-- **依赖简化**：从 5 个 Python 包精简为 1 个 Go 库（`goquery`）
-- **性能提升**：原生 goroutine 并发、二进制启动毫秒级
+## 历史背景（不再追溯）
 
-### API 兼容性
-- `GET /` - 完全兼容
-- `GET /lang` - 完全兼容
-- `GET /repo?lang=&since=` - 完全兼容
-- `GET /user?lang=&since=&sponsorable=` - 完全兼容
+### v0.2.0 之前（2026-06-09 之前）
+- Python/FastAPI 原版（[doforce/github-trending](https://github.com/doforce/github-trending)）
+- Go 1.x 重写：标准库 `net/http` + `goquery` HTML 解析
+- 旧端点 `GET /`、`GET /lang`、`GET /repo`、`GET /user`（已删除）
 
-[Unreleased]: https://github.com/dong4j/starcat-trending-api/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/dong4j/starcat-trending-api/releases/tag/v2.0.0
+[Unreleased]: https://github.com/dong4j/starcat-trending-api/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/dong4j/starcat-trending-api/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/dong4j/starcat-trending-api/releases/tag/v0.1.0

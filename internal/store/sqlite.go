@@ -15,12 +15,12 @@ import (
 
 // SQLiteStore 基于 SQLite 的 trending 数据持久化。
 //
-// R-01 v1.2: 从零建立。连接策略: WAL + busy_timeout=5000 + MaxOpenConns(1)。
+// 连接策略: WAL + busy_timeout=5000 + MaxOpenConns(1)。
 type SQLiteStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteStore 打开 SQLite 数据库并执行 migration。
+// NewSQLiteStore 打开 SQLite 数据库并初始化 schema。
 func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite", dsn+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
@@ -35,7 +35,7 @@ func NewSQLiteStore(dsn string) (*SQLiteStore, error) {
 		return nil, err
 	}
 
-	if err := migrate(db); err != nil {
+	if err := createSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -49,18 +49,12 @@ func (s *SQLiteStore) UpsertRepo(repo model.TrendingRepo) error {
 	now := time.Now().Format(time.RFC3339)
 	capturedAt := repo.CapturedAt.Format(time.RFC3339)
 
-	if repo.Source == "" {
-		repo.Source = "github"
-	}
-
 	_, err := s.db.Exec(`
 		INSERT INTO trending_repos
 			(full_name, owner, name, desc_text, stars, forks, language, change, build_by_json,
-			 since, captured_at, enrich_priority, source, description_zh, 
-			 zread_week_start, zread_week_end, zread_week_label, zread_rank_in_week, zread_wiki_id,
-			 zread_week_start_raw, zread_week_end_raw, zread_year_inferred)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(full_name, since, source) DO UPDATE SET
+			 since, captured_at, enrich_priority)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(full_name, since) DO UPDATE SET
 			desc_text = excluded.desc_text,
 			stars = excluded.stars,
 			forks = excluded.forks,
@@ -68,34 +62,23 @@ func (s *SQLiteStore) UpsertRepo(repo model.TrendingRepo) error {
 			change = excluded.change,
 			build_by_json = excluded.build_by_json,
 			captured_at = excluded.captured_at,
-			enrich_priority = excluded.enrich_priority,
-			description_zh = excluded.description_zh,
-			zread_week_start = excluded.zread_week_start,
-			zread_week_end = excluded.zread_week_end,
-			zread_week_label = excluded.zread_week_label,
-			zread_rank_in_week = excluded.zread_rank_in_week,
-			zread_wiki_id = excluded.zread_wiki_id,
-			zread_week_start_raw = excluded.zread_week_start_raw,
-			zread_week_end_raw = excluded.zread_week_end_raw,
-			zread_year_inferred = excluded.zread_year_inferred
+			enrich_priority = excluded.enrich_priority
 	`, repo.FullName, repo.Owner, repo.Name, repo.DescText, repo.Stars, repo.Forks,
 		repo.Language, repo.Change, repo.BuildByJSON,
-		repo.Since, capturedAt, repo.EnrichPriority, repo.Source, repo.DescriptionZh,
-		repo.ZreadWeekStart, repo.ZreadWeekEnd, repo.ZreadWeekLabel, repo.ZreadRankInWeek, repo.ZreadWikiID,
-		repo.ZreadWeekStartRaw, repo.ZreadWeekEndRaw, repo.ZreadYearInferred)
+		repo.Since, capturedAt, repo.EnrichPriority)
 
 	if err != nil {
-		return fmt.Errorf("upsert %s/%s/%s: %w", repo.FullName, repo.Since, repo.Source, err)
+		return fmt.Errorf("upsert %s/%s: %w", repo.FullName, repo.Since, err)
 	}
 
 	// 更新 captured_at（ON CONFLICT 不自动处理）
-	_, _ = s.db.Exec(`UPDATE trending_repos SET captured_at = ? WHERE full_name = ? AND since = ? AND source = ?`,
-		now, repo.FullName, repo.Since, repo.Source)
+	_, _ = s.db.Exec(`UPDATE trending_repos SET captured_at = ? WHERE full_name = ? AND since = ?`,
+		now, repo.FullName, repo.Since)
 	return nil
 }
 
 // GetRepos 按条件查询 repo 列表。
-func (s *SQLiteStore) GetRepos(since, lang, source string, limit int) ([]model.TrendingRepo, error) {
+func (s *SQLiteStore) GetRepos(since, lang string, limit int) ([]model.TrendingRepo, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -104,16 +87,10 @@ func (s *SQLiteStore) GetRepos(since, lang, source string, limit int) ([]model.T
 		gh_repo_id, description, homepage, license_spdx, topics_json, watchers, subscribers,
 		owner_avatar, is_archived, is_fork, is_private, default_branch, open_issues,
 		pushed_at, updated_at, created_at,
-		since, captured_at, enriched_at, is_available, enrich_priority,
-		source, description_zh, zread_week_start, zread_week_end, zread_week_label, 
-		zread_rank_in_week, zread_wiki_id, zread_week_start_raw, zread_week_end_raw, zread_year_inferred
+		since, captured_at, enriched_at, is_available, enrich_priority
 	FROM trending_repos WHERE is_available = 1 AND enriched_at IS NOT NULL`
 	args := []interface{}{}
 
-	if source != "" && source != "merged" {
-		query += " AND source = ?"
-		args = append(args, source)
-	}
 	if since != "" {
 		query += " AND since = ?"
 		args = append(args, since)
@@ -144,7 +121,7 @@ func (s *SQLiteStore) GetUnenrichedRepos(limit int) ([]model.TrendingRepo, error
 }
 
 // UpdateEnriched 更新 enricher 补全字段。
-func (s *SQLiteStore) UpdateEnriched(fullName, since, source string, repo model.TrendingRepo) error {
+func (s *SQLiteStore) UpdateEnriched(fullName, since string, repo model.TrendingRepo) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := s.db.Exec(`
 		UPDATE trending_repos SET
@@ -155,37 +132,37 @@ func (s *SQLiteStore) UpdateEnriched(fullName, since, source string, repo model.
 			language = COALESCE(?, language),
 			stars = CASE WHEN ? > stars THEN ? ELSE stars END,
 			enriched_at = ?
-		WHERE full_name = ? AND since = ? AND source = ?
+		WHERE full_name = ? AND since = ?
 	`, repo.GhRepoID, repo.Description, repo.Homepage, repo.LicenseSpdx,
 		repo.TopicsJSON, repo.Watchers, repo.Subscribers, repo.OwnerAvatar,
 		boolToInt(repo.IsArchived), boolToInt(repo.IsFork), boolToInt(repo.IsPrivate), repo.DefaultBranch,
 		repo.OpenIssues, repo.PushedAt, repo.UpdatedAt, repo.CreatedAt,
 		repo.Language, repo.Stars, repo.Stars,
-		now, fullName, since, source)
+		now, fullName, since)
 	return err
 }
 
 // MarkUnavailable 标记 repo 404。
-func (s *SQLiteStore) MarkUnavailable(fullName, since, source string) error {
-	_, err := s.db.Exec(`UPDATE trending_repos SET is_available = 0 WHERE full_name = ? AND since = ? AND source = ?`,
-		fullName, since, source)
+func (s *SQLiteStore) MarkUnavailable(fullName, since string) error {
+	_, err := s.db.Exec(`UPDATE trending_repos SET is_available = 0 WHERE full_name = ? AND since = ?`,
+		fullName, since)
 	return err
 }
 
 // RecomputePriorities 按榜单位置重算 priority。
-func (s *SQLiteStore) RecomputePriorities(since, source string) error {
+func (s *SQLiteStore) RecomputePriorities(since string) error {
 	// 先全置 0
-	_, _ = s.db.Exec(`UPDATE trending_repos SET enrich_priority = 0 WHERE since = ? AND source = ?`, since, source)
+	_, _ = s.db.Exec(`UPDATE trending_repos SET enrich_priority = 0 WHERE since = ?`, since)
 
 	// top 30 priority += 100
 	_, err := s.db.Exec(`
 		UPDATE trending_repos SET enrich_priority = 100
 		WHERE full_name IN (
 			SELECT full_name FROM trending_repos
-			WHERE since = ? AND source = ? AND enriched_at IS NULL AND is_available = 1
+			WHERE since = ? AND enriched_at IS NULL AND is_available = 1
 			ORDER BY captured_at DESC LIMIT 30
-		) AND since = ? AND source = ?
-	`, since, source, since, source)
+		) AND since = ?
+	`, since, since)
 	if err != nil {
 		return err
 	}
@@ -195,16 +172,16 @@ func (s *SQLiteStore) RecomputePriorities(since, source string) error {
 		UPDATE trending_repos SET enrich_priority = 50
 		WHERE full_name IN (
 			SELECT full_name FROM trending_repos
-			WHERE since = ? AND source = ? AND enriched_at IS NULL AND is_available = 1 AND enrich_priority = 0
+			WHERE since = ? AND enriched_at IS NULL AND is_available = 1 AND enrich_priority = 0
 			ORDER BY captured_at DESC LIMIT 70
-		) AND since = ? AND source = ?
-	`, since, source, since, source)
+		) AND since = ?
+	`, since, since)
 	if err != nil {
 		return err
 	}
 
 	// 其余 +10
-	_, err = s.db.Exec(`UPDATE trending_repos SET enrich_priority = 10 WHERE since = ? AND source = ? AND enrich_priority = 0 AND enriched_at IS NULL`, since, source)
+	_, err = s.db.Exec(`UPDATE trending_repos SET enrich_priority = 10 WHERE since = ? AND enrich_priority = 0 AND enriched_at IS NULL`, since)
 	return err
 }
 // UpsertLanguages 批量覆写语言列表。
@@ -278,8 +255,6 @@ func (s *SQLiteStore) queryRepos(query string, args ...interface{}) ([]model.Tre
 			&r.IsArchived, &r.IsFork, &r.IsPrivate, &r.DefaultBranch, &r.OpenIssues,
 			&r.PushedAt, &r.UpdatedAt, &r.CreatedAt,
 			&r.Since, &capturedAtStr, &enrichedAtStr, &r.IsAvailable, &r.EnrichPriority,
-			&r.Source, &r.DescriptionZh, &r.ZreadWeekStart, &r.ZreadWeekEnd, &r.ZreadWeekLabel,
-			&r.ZreadRankInWeek, &r.ZreadWikiID, &r.ZreadWeekStartRaw, &r.ZreadWeekEndRaw, &r.ZreadYearInferred,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan trending_repos row: %w", err)
@@ -334,9 +309,7 @@ func TrendingRepoToCardDTO(r model.TrendingRepo) model.StarcatRepoCardDTO {
 // buildTrendingExtension 构造 trending 扩展段。
 func buildTrendingExtension(r model.TrendingRepo) *model.TrendingExtension {
 	ext := &model.TrendingExtension{
-		Change:        r.Change,
-		DescriptionZh: r.DescriptionZh,
-		ZreadWikiID:   r.ZreadWikiID,
+		Change: r.Change,
 	}
 
 	if r.BuildByJSON != nil {

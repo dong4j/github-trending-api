@@ -1,3 +1,6 @@
+// Package handler 包含 HTTP handler 实现。
+//
+// trending-api 只走 GitHub 单源；zread 数据请走 weekly-api /api/v1/trending/zread。
 package handler
 
 import (
@@ -9,12 +12,19 @@ import (
 	"github.com/dong4j/starcat-trending-api/internal/store"
 )
 
-// HandleReposV1 GET /api/v1/repos - 返回 trending repo 卡片列表。
+// HandleReposV1 GET /api/v1/repos - 返回 GitHub trending repo 卡片列表。
+//
+// query 参数：
+//   - since: daily | weekly | monthly（默认 daily）
+//   - lang: 语言过滤（如 go / python / swift）
+//   - limit: 1-100（默认 100）
+//
+// 不接受 source=* 参数。trending-api 固定走 GitHub 单源；zread 数据请改用
+// weekly-api /api/v1/trending/zread。
 func HandleReposV1(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		lang := r.URL.Query().Get("lang")
 		since := r.URL.Query().Get("since")
-		source := r.URL.Query().Get("source") // github|zread|merged
 		if since == "" {
 			since = "daily"
 		}
@@ -30,6 +40,20 @@ func HandleReposV1(s store.Store) http.HandlerFunc {
 			return
 		}
 
+		// 显式拒绝任何 source=* 参数，引导客户端改用 weekly-api。
+		if src := r.URL.Query().Get("source"); src != "" {
+			writeError(w, http.StatusBadRequest, "BAD_REQUEST",
+				fmt.Sprintf("source=%s is not supported by trending-api. "+
+					"trending-api is github-only; use weekly-api /api/v1/trending/zread for zread data.", src),
+				map[string]interface{}{
+					"param":   "source",
+					"got":     src,
+					"allowed": []string{"(none — trending-api is github-only)"},
+					"see":     "https://github.com/dong4j/starcat-weekly-api (GET /api/v1/trending/zread)",
+				})
+			return
+		}
+
 		limit := 100
 		if l := r.URL.Query().Get("limit"); l != "" {
 			fmt.Sscanf(l, "%d", &limit)
@@ -38,61 +62,8 @@ func HandleReposV1(s store.Store) http.HandlerFunc {
 			}
 		}
 
-		var repos []model.TrendingRepo
-		var err error
-
-		if source == "merged" {
-			// merged 逻辑: github 优先, zread 补缺
-			ghRepos, err := s.GetRepos(since, lang, "github", limit)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR",
-					"failed to query github repos: "+err.Error(), nil)
-				return
-			}
-
-			// 只有 weekly 支持 zread
-			var zRepos []model.TrendingRepo
-			if since == "weekly" {
-				zRepos, _ = s.GetRepos(since, lang, "zread", limit)
-			}
-
-			// 去重合并
-			seen := make(map[string]bool)
-			for _, r := range ghRepos {
-				seen[r.FullName] = true
-				repos = append(repos, r)
-			}
-			mergedFromZread := 0
-			for _, r := range zRepos {
-				if !seen[r.FullName] {
-					repos = append(repos, r)
-					mergedFromZread++
-				}
-			}
-			
-			mergedDedupRemoved := len(zRepos) - mergedFromZread
-
-			cards := make([]model.StarcatRepoCardDTO, len(repos))
-			for i, r := range repos {
-				cards[i] = store.TrendingRepoToCardDTO(r)
-			}
-
-			writeJSONWithMeta(w, cards, &model.Meta{
-				Since:              since,
-				Language:           lang,
-				Source:             source,
-				Total:              len(cards),
-				MergedFromGithub:   len(ghRepos),
-				MergedFromZread:    mergedFromZread,
-				MergedDedupRemoved: mergedDedupRemoved,
-				GeneratedAt:        time.Now().Format(time.RFC3339),
-				CacheStatus:        "fresh",
-			})
-			return
-		}
-
-		// 单源查询
-		repos, err = s.GetRepos(since, lang, source, limit)
+		// GitHub 单源查询
+		repos, err := s.GetRepos(since, lang, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR",
 				"failed to query repos: "+err.Error(), nil)
@@ -112,7 +83,6 @@ func HandleReposV1(s store.Store) http.HandlerFunc {
 		writeJSONWithMeta(w, cards, &model.Meta{
 			Since:       since,
 			Language:    lang,
-			Source:      source,
 			Total:       len(cards),
 			GeneratedAt: time.Now().Format(time.RFC3339),
 			CacheStatus: cacheStatus,
