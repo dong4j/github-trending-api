@@ -53,7 +53,7 @@ func New(s store.Store, enc *enricher.Enricher) *Scheduler {
 	// monthly 每 2 天 05:19 UTC
 	sch.cron.AddFunc("19 5 */2 * *", sch.syncMonthly)
 	// zread 每周一 06:00 UTC
-	sch.cron.AddFunc("0 0 6 * * 1", sch.syncZread)
+	sch.cron.AddFunc("0 0 6 * * 1", sch.runZreadFetch)
 	// 长尾 enrich 每天 03:00 UTC
 	sch.cron.AddFunc("0 3 * * *", sch.enrichLongTail)
 	// 过期清理 每天 04:00 UTC
@@ -67,7 +67,7 @@ func (sch *Scheduler) Start() {
 	log.Println("[scheduler] cold start: syncing daily + languages + zread")
 	go sch.syncDaily()
 	go sch.syncLanguages()
-	go sch.syncZread()
+	go sch.runZreadFetch()
 	sch.cron.Start()
 	log.Println("[scheduler] cron started")
 }
@@ -86,7 +86,7 @@ func (sch *Scheduler) SyncAll() {
 		sch.syncWeekly()
 		sch.syncMonthly()
 		sch.syncLanguages()
-		sch.syncZread()
+		sch.runZreadFetch()
 	}()
 }
 
@@ -129,7 +129,7 @@ func (sch *Scheduler) syncMonthly() {
 	_ = sch.store.RecomputePriorities("monthly", "github")
 }
 
-func (sch *Scheduler) syncZread() {
+func (sch *Scheduler) runZreadFetch() {
 	if !sch.tryLock("zread") {
 		return
 	}

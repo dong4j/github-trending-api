@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-10
+
+### Added
+- **R-02 (Zread Integration)**：引入 Zread Trending 数据源。
+- **Source 维度合并**：`GET /api/v1/repos?source=merged` 提供 GitHub 与 Zread 双榜合并去重能力。
+- **Zread 扩展字段**：在 trending 扩展段中增加 `description_zh` 和 `zread_wiki_id` 等字段。
+
 ## [2.0.0] - 2026-06-09
 
 ### Added

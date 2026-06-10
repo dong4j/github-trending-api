@@ -51,6 +51,7 @@ go run ./cmd/server/
 |------|------|--------|------|
 | `lang` | string | — | 语言过滤（如 `Go`、`Python`） |
 | `since` | string | `daily` | `daily` / `weekly` / `monthly` |
+| `source`| string | `github`| 数据源：`github` / `zread` (仅限 weekly) / `merged` (双榜合并) |
 | `limit` | int | 100 | 返回数量上限（最大 100） |
 
 响应示例见 `internal/model/repo_card.go` 中的 `StarcatRepoCardDTO`。

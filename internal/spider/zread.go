@@ -15,49 +15,37 @@ import (
 type ZreadSpider struct {
 	client *http.Client
 	store  *store.SQLiteStore
+	url    string
 }
 
 func NewZreadSpider(s *store.SQLiteStore) *ZreadSpider {
 	return &ZreadSpider{
 		client: &http.Client{Timeout: 30 * time.Second},
 		store:  s,
+		url:    "https://zread.ai/api/v1/public/repo/trending",
 	}
 }
 
 func (s *ZreadSpider) RunOnce(ctx context.Context) error {
 	log.Println("[zread] starting fetch trending...")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://zread.ai/api/v1/public/repo/trending", nil)
+	result, err := s.fetchAndParse(ctx)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("zread status: %d", resp.StatusCode)
-	}
-
-	var result ZreadFetchResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-
-	if result.Code != 0 {
-		return fmt.Errorf("zread api error: %d %s", result.Code, result.Msg)
+	if s.store == nil {
+		return nil // For testing
 	}
 
 	now := time.Now()
 	for _, group := range result.Data {
 		// 推断年份
-		year := inferYear(group.TimeSpan.Start, now)
+		year, err := InferYear(group.TimeSpan.Start, now)
+		if err != nil {
+			log.Printf("[zread] failed to infer year for %s: %v", group.TimeSpan.Start, err)
+			continue
+		}
 
 		for i, r := range group.Repos {
 			fullName := r.Owner + "/" + r.Name
@@ -98,14 +86,39 @@ func (s *ZreadSpider) RunOnce(ctx context.Context) error {
 	return nil
 }
 
-func inferYear(mmdd string, now time.Time) int {
-	// 极简推断: 如果 MM 大于当前 MM, 认为是去年
-	var m int
-	fmt.Sscanf(mmdd, "%d", &m)
-	if m > int(now.Month()) {
-		return now.Year() - 1
+func (s *ZreadSpider) fetchAndParse(ctx context.Context) (*ZreadFetchResult, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", s.url, nil)
+	if err != nil {
+		return nil, err
 	}
-	return now.Year()
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json")
+	// 防御 Cloudflare / WAF，模拟真实浏览器请求 JSON
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("zread status: %d", resp.StatusCode)
+	}
+
+	var result ZreadFetchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("zread api error: %d %s", result.Code, result.Msg)
+	}
+
+	return &result, nil
 }
 
 func convertMMDD(mmdd string) string {

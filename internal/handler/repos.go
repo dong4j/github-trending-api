@@ -69,6 +69,8 @@ func HandleReposV1(s store.Store) http.HandlerFunc {
 					mergedFromZread++
 				}
 			}
+			
+			mergedDedupRemoved := len(zRepos) - mergedFromZread
 
 			cards := make([]model.StarcatRepoCardDTO, len(repos))
 			for i, r := range repos {
@@ -76,14 +78,15 @@ func HandleReposV1(s store.Store) http.HandlerFunc {
 			}
 
 			writeJSONWithMeta(w, cards, &model.Meta{
-				Since:           since,
-				Language:        lang,
-				Source:          source,
-				Total:           len(cards),
-				MergedFromGithub: len(ghRepos),
-				MergedFromZread:  mergedFromZread,
-				GeneratedAt:     time.Now().Format(time.RFC3339),
-				CacheStatus:     "fresh",
+				Since:              since,
+				Language:           lang,
+				Source:             source,
+				Total:              len(cards),
+				MergedFromGithub:   len(ghRepos),
+				MergedFromZread:    mergedFromZread,
+				MergedDedupRemoved: mergedDedupRemoved,
+				GeneratedAt:        time.Now().Format(time.RFC3339),
+				CacheStatus:        "fresh",
 			})
 			return
 		}
