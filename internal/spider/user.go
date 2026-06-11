@@ -70,9 +70,13 @@ func (u *UserSpider) Parse(html string) []UserItem {
 		}
 
 		// 获取 github_name
+		//
+		// 同 RepoSpider 的修复（2026-06-11）：GitHub HTML 里 `href` 都是 "/login"
+		// 这种带前导斜杠的根路径，必须 strip 掉，否则下游拼接 / 落库都会出错。
 		githubSel := article.Find("div > p:has(a)")
 		if githubSel.Length() > 0 {
-			item.GitHubName, _ = githubSel.Find("a").Attr("href")
+			href, _ := githubSel.Find("a").Attr("href")
+			item.GitHubName = strings.TrimPrefix(href, "/")
 		}
 
 		// 获取热门仓库
@@ -84,6 +88,8 @@ func (u *UserSpider) Parse(html string) []UserItem {
 			repo := ""
 			if repoLink.Length() > 0 {
 				repo, _ = repoLink.Attr("href")
+				// 同上：strip 前导 "/"，保持 "owner/repo" 干净格式。
+				repo = strings.TrimPrefix(repo, "/")
 			}
 
 			// 描述在 h1 + div 中

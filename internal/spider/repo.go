@@ -62,9 +62,21 @@ func (r *RepoSpider) Parse(html string) []RepoItem {
 		item := RepoItem{}
 
 		// 获取 repo 路径 (href)
+		//
+		// 关键约束（2026-06-11 修复）：
+		// GitHub 的 trending HTML 里 `<a href="/owner/repo">`，href 是 *带前导斜杠*
+		// 的根路径。如果直接赋给 item.Repo，下游 scheduler 的
+		// `strings.SplitN(item.Repo, "/", 2)` 会拆成 ["", "owner/repo"]，
+		// owner 取到空字符串，fullName 落库时变成 "/owner/repo"。
+		// enricher 接着拼 https://api.github.com/repos//owner/repo（双斜杠），
+		// GitHub 一律返回 404，触发 MarkUnavailable，结果整张表 is_available=0、
+		// enriched_at=NULL，前端 /api/v1/repos 永远空数组、cache_status=cold。
+		//
+		// 此处必须 strip 前导 "/"，让 item.Repo 保持 "owner/repo" 干净格式。
+		// 不能在下游补救（scheduler 也加了 defensive check 兜底，但根因应在源头修）。
 		h2 := article.Find("h2")
 		repo := h2.Find("a").AttrOr("href", "")
-		item.Repo = repo
+		item.Repo = strings.TrimPrefix(repo, "/")
 
 		// 获取描述
 		var descParts []string

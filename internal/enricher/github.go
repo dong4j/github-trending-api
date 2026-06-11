@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -214,7 +215,18 @@ func buildEnrichedRepo(repo *model.TrendingRepo, gh *githubRepoResponse) model.T
 
 	r.GhRepoID = &gh.ID
 	r.Description = gh.Description
-	r.Homepage = gh.Homepage
+	// Homepage 归一化（2026-06-11）：
+	// GitHub 的 /repos API 在仓库未填主页时返回 "" 而不是 null。直接透传会让
+	// 下游（特别是 Swift / TS / Kotlin 客户端解 URL 类型）抛 dataCorrupted 错，
+	// 整批响应解码崩。这里把 "" 归一化为 nil，让 JSON envelope 输出 null，
+	// 与 description / topics 这类「业务上等同空值」的字段保持一致。
+	// 客户端 StarcatRepoCardDTO.decodeOptionalURL 也加了防御层，两边都修是为了
+	// 让 fly.dev 旧版本 / 本地新版本两套部署对所有客户端都行为一致。
+	if gh.Homepage != nil && strings.TrimSpace(*gh.Homepage) == "" {
+		r.Homepage = nil
+	} else {
+		r.Homepage = gh.Homepage
+	}
 	r.Watchers = gh.Watchers
 	r.Subscribers = gh.Subscribers
 	r.IsArchived = gh.Archived

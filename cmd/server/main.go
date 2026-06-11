@@ -89,6 +89,9 @@ func main() {
 	// 路由
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
+	// R-03 (2026-06-11): /api/v1/ping 专门给 Starcat 客户端「测试连接」按钮用，
+	// 在 middleware 后面挂——同时验证服务可达 + Bearer Key 正确。详见 handler/ping.go。
+	mux.Handle("GET /api/v1/ping", authMW.Wrap(handler.HandlePingV1("trending")))
 	mux.Handle("GET /api/v1/repos", authMW.Wrap(handler.HandleReposV1(sqliteStore)))
 	mux.Handle("GET /api/v1/languages", authMW.Wrap(handler.HandleLanguagesV1(sch)))
 	mux.Handle("GET /api/v1/users", authMW.Wrap(handler.HandleUsersV1()))
@@ -113,6 +116,7 @@ func main() {
 
 	log.Printf("starcat-trending-api starting on port %s", port)
 	log.Printf("Endpoints:")
+	log.Printf("  GET  /api/v1/ping           - Connectivity probe for Starcat client (auth required)")
 	log.Printf("  GET  /api/v1/repos          - Trending repos (auth required)")
 	log.Printf("  GET  /api/v1/languages      - Languages list (auth required)")
 	log.Printf("  GET  /api/v1/users          - Trending developers (auth required)")

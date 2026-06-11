@@ -154,6 +154,18 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) []string {
 		}
 		owner, name := parts[0], parts[1]
 
+		// Defense in depth（2026-06-11）：
+		// 历史上 spider/repo.go 漏 strip 了 href 的前导 "/"，导致 SplitN 后
+		// owner="" / name="owner/repo"，整批数据落库后被 enricher 用 404 标 unavailable，
+		// 整张表的 is_available 全 0，handler 返回空数组 + cache_status=cold。
+		// 即使源头已修，这里也兜底校验：owner 或 name 为空一律跳过 + 打 warn，
+		// 让任何未来再出现的同类异常（爬虫 HTML 结构变动、第三方源差异）能在日志可见。
+		if owner == "" || name == "" {
+			log.Printf("[scheduler] skip malformed repo %q (owner=%q name=%q) — spider bug?",
+				item.Repo, owner, name)
+			continue
+		}
+
 		var bjJSON *string
 		if len(item.BuildBy) > 0 {
 			b, _ := json.Marshal(item.BuildBy)
