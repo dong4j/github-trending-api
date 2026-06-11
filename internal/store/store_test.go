@@ -420,6 +420,232 @@ func TestUpsertLanguages(t *testing.T) {
 	}
 }
 
+// TestGetAggregatedLanguages_BasicGrouping 验证：
+//  1. 仅返回 enriched + available 的 repo 对应的语言
+//  2. NULL / "" language 归到 __uncategorized__ 一桶
+//  3. 排序：未分类排最后；其余按 count DESC, key ASC
+//  4. 同一 repo 在 daily / weekly 两个 since 都有行 → 仍按行数累加（这是当前设计：
+//     一个 repo 上多个 since 的命中视为多次 trending 出现，count 叠加）
+func TestGetAggregatedLanguages_BasicGrouping(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now()
+
+	// fixture：构造覆盖以下场景的数据
+	//   - Go / Python 各 2 条（count = 2）
+	//   - Rust 1 条（count = 1）
+	//   - language=NULL 1 条 + language="" 1 条（uncategorized count = 2）
+	//   - 1 条 unenriched + 1 条 unavailable，不应该计入聚合
+	type seed struct {
+		fullName    string
+		lang        *string // nil = NULL；&"" 表示 ""
+		enriched    bool
+		isAvailable bool
+		since       string
+	}
+	emptyStr := ""
+	seeds := []seed{
+		{"a/go1", ptrStr("Go"), true, true, "daily"},
+		{"a/go2", ptrStr("Go"), true, true, "daily"},
+		{"a/py1", ptrStr("Python"), true, true, "daily"},
+		{"a/py2", ptrStr("Python"), true, true, "weekly"},
+		{"a/rs1", ptrStr("Rust"), true, true, "daily"},
+		{"a/un1", nil, true, true, "daily"},          // NULL
+		{"a/un2", &emptyStr, true, true, "weekly"},   // 空串
+		{"a/un3", nil, false, true, "daily"},         // 未 enrich → 不计
+		{"a/un4", ptrStr("Java"), true, false, "daily"}, // unavailable → 不计
+	}
+	for _, sd := range seeds {
+		r := model.TrendingRepo{
+			FullName: sd.fullName, Owner: "a", Name: sd.fullName[2:],
+			Language: sd.lang, Since: sd.since,
+			CapturedAt: now, IsAvailable: true,
+		}
+		if err := s.UpsertRepo(r); err != nil {
+			t.Fatalf("seed %s: %v", sd.fullName, err)
+		}
+		if sd.enriched {
+			enrichedAt := now
+			// UpdateEnriched 会写 language = COALESCE(?, language)：传 nil 不改、传值会覆盖
+			// 这里需要保留 fixture 的 language（特别是 NULL / "" 这两种「未分类」case）。
+			// 关键：enricher 字段里 Language=nil 会跳过 COALESCE 这条，保留 spider 入库时的值；
+			// fixture 用 emptyStr 时也要原样保留——直接传 sd.lang 即可。
+			if err := s.UpdateEnriched(sd.fullName, sd.since, model.TrendingRepo{
+				EnrichedAt: &enrichedAt,
+				Language:   sd.lang,
+			}); err != nil {
+				t.Fatalf("update enriched %s: %v", sd.fullName, err)
+			}
+		}
+		if !sd.isAvailable {
+			if err := s.MarkUnavailable(sd.fullName, sd.since); err != nil {
+				t.Fatalf("mark unavailable %s: %v", sd.fullName, err)
+			}
+		}
+	}
+
+	got, err := s.GetAggregatedLanguages()
+	if err != nil {
+		t.Fatalf("GetAggregatedLanguages: %v", err)
+	}
+
+	// 期望排序（SQL 排序键：is_uncategorized ASC, count DESC, key ASC）：
+	//   - is_uncategorized=0 的全部排在 1 的前面（未分类永远最后）
+	//   - 普通语言里按 count DESC：Go(2), Python(2), Rust(1)
+	//   - count 相同时按 key ASC：Go < Python（字典序）
+	// 最终：Go(2) → Python(2) → Rust(1) → __uncategorized__(2)
+	wantKeys := []string{"Go", "Python", "Rust", model.UncategorizedLanguageKey}
+	wantCounts := []int{2, 2, 1, 2}
+	if len(got) != len(wantKeys) {
+		t.Fatalf("want %d aggregates, got %d (%+v)", len(wantKeys), len(got), got)
+	}
+	for i := range wantKeys {
+		if got[i].Key != wantKeys[i] {
+			t.Errorf("aggregates[%d].Key: want %q, got %q", i, wantKeys[i], got[i].Key)
+		}
+		if got[i].Count != wantCounts[i] {
+			t.Errorf("aggregates[%d].Count for %q: want %d, got %d",
+				i, wantKeys[i], wantCounts[i], got[i].Count)
+		}
+	}
+
+	// 未分类项的 label 必须是 model.UncategorizedLanguageLabel
+	last := got[len(got)-1]
+	if last.Key != model.UncategorizedLanguageKey {
+		t.Errorf("last item should be uncategorized, got key=%q", last.Key)
+	}
+	if last.Label != model.UncategorizedLanguageLabel {
+		t.Errorf("uncategorized label: want %q, got %q",
+			model.UncategorizedLanguageLabel, last.Label)
+	}
+
+	// 普通语言的 label 应该等于 key
+	if got[0].Label != got[0].Key {
+		t.Errorf("non-uncategorized label should equal key, got key=%q label=%q",
+			got[0].Key, got[0].Label)
+	}
+}
+
+// TestGetAggregatedLanguages_EmptyTable 验证空表返 [] 而非 nil。
+func TestGetAggregatedLanguages_EmptyTable(t *testing.T) {
+	s := newTestStore(t)
+	got, err := s.GetAggregatedLanguages()
+	if err != nil {
+		t.Fatalf("GetAggregatedLanguages: %v", err)
+	}
+	if got == nil {
+		t.Errorf("GetAggregatedLanguages on empty table should return [], got nil")
+	}
+	if len(got) != 0 {
+		t.Errorf("empty table: want 0 aggregates, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestGetAggregatedLanguages_OnlyUncategorized 验证表里全是 NULL 时仅返一项 uncategorized。
+func TestGetAggregatedLanguages_OnlyUncategorized(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		r := model.TrendingRepo{
+			FullName: "a/u" + itoa(i), Owner: "a", Name: "u" + itoa(i),
+			Language: nil, Since: "daily",
+			CapturedAt: now, IsAvailable: true,
+		}
+		if err := s.UpsertRepo(r); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		enrichedAt := now
+		if err := s.UpdateEnriched(r.FullName, "daily", model.TrendingRepo{
+			EnrichedAt: &enrichedAt,
+		}); err != nil {
+			t.Fatalf("enrich: %v", err)
+		}
+	}
+	got, err := s.GetAggregatedLanguages()
+	if err != nil {
+		t.Fatalf("GetAggregatedLanguages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 aggregate, got %d (%+v)", len(got), got)
+	}
+	if got[0].Key != model.UncategorizedLanguageKey {
+		t.Errorf("only item should be uncategorized, got %q", got[0].Key)
+	}
+	if got[0].Count != 3 {
+		t.Errorf("count: want 3, got %d", got[0].Count)
+	}
+}
+
+// TestGetRepos_UncategorizedSentinel 验证 lang=__uncategorized__ 触发 NULL/'' 过滤。
+func TestGetRepos_UncategorizedSentinel(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now()
+	emptyStr := ""
+
+	// 准备：3 条记录
+	//   a: language=Go     enriched
+	//   b: language=NULL   enriched
+	//   c: language=""     enriched
+	cases := []struct {
+		name string
+		lang *string
+	}{
+		{"a/go", ptrStr("Go")},
+		{"b/null", nil},
+		{"c/empty", &emptyStr},
+	}
+	for _, c := range cases {
+		r := model.TrendingRepo{
+			FullName: c.name, Owner: "x", Name: "n",
+			Language: c.lang, Since: "daily",
+			CapturedAt: now, IsAvailable: true,
+		}
+		if err := s.UpsertRepo(r); err != nil {
+			t.Fatalf("upsert %s: %v", c.name, err)
+		}
+		enrichedAt := now
+		if err := s.UpdateEnriched(c.name, "daily", model.TrendingRepo{
+			EnrichedAt: &enrichedAt,
+			Language:   c.lang, // 保留 NULL / ""
+		}); err != nil {
+			t.Fatalf("enrich %s: %v", c.name, err)
+		}
+	}
+
+	// (1) lang="" → 不过滤，3 条都返
+	all, err := s.GetRepos("daily", "", 100)
+	if err != nil {
+		t.Fatalf("GetRepos all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("lang='' should return all 3, got %d (%v)", len(all), namesOf(all))
+	}
+
+	// (2) lang="Go" → 仅 a/go
+	goRepos, err := s.GetRepos("daily", "Go", 100)
+	if err != nil {
+		t.Fatalf("GetRepos Go: %v", err)
+	}
+	if len(goRepos) != 1 || goRepos[0].FullName != "a/go" {
+		t.Errorf("lang=Go: want [a/go], got %v", namesOf(goRepos))
+	}
+
+	// (3) lang=__uncategorized__ → b/null + c/empty
+	uncat, err := s.GetRepos("daily", model.UncategorizedLanguageKey, 100)
+	if err != nil {
+		t.Fatalf("GetRepos uncategorized: %v", err)
+	}
+	if len(uncat) != 2 {
+		t.Errorf("lang=uncategorized: want 2, got %d (%v)", len(uncat), namesOf(uncat))
+	}
+	gotNames := map[string]bool{}
+	for _, r := range uncat {
+		gotNames[r.FullName] = true
+	}
+	if !gotNames["b/null"] || !gotNames["c/empty"] {
+		t.Errorf("lang=uncategorized: want {b/null, c/empty}, got %v", namesOf(uncat))
+	}
+}
+
 // TestUpsertLanguages_Empty 不报错,清空表。
 func TestUpsertLanguages_Empty(t *testing.T) {
 	s := newTestStore(t)

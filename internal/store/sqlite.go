@@ -78,6 +78,15 @@ func (s *SQLiteStore) UpsertRepo(repo model.TrendingRepo) error {
 }
 
 // GetRepos 按条件查询 repo 列表。
+//
+// `lang` 参数三种语义：
+//   - 空字符串：不按语言过滤
+//   - `model.UncategorizedLanguageKey`（即 `"__uncategorized__"`）：返回 `language IS NULL OR
+//     language = ''` 的行（与 `GetAggregatedLanguages` 的「未分类」桶口径完全一致）
+//   - 其它值：按 `language = ?` 严格等值过滤
+//
+// **不**对 lang 做 case-insensitive 匹配——后端 enricher 已经把 GitHub 返回的语言名规范化
+// （Go / Python / TypeScript），客户端从 sidebar 拿到的 key 必然能 1:1 命中。
 func (s *SQLiteStore) GetRepos(since, lang string, limit int) ([]model.TrendingRepo, error) {
 	if limit <= 0 {
 		limit = 100
@@ -95,7 +104,11 @@ func (s *SQLiteStore) GetRepos(since, lang string, limit int) ([]model.TrendingR
 		query += " AND since = ?"
 		args = append(args, since)
 	}
-	if lang != "" {
+	if lang == model.UncategorizedLanguageKey {
+		// 哨兵值：未分类——`language IS NULL OR language = ''`。
+		// 不带占位符（IS NULL 不能用 `?`），直接拼到 SQL 里安全（哨兵是 const 常量，无注入风险）。
+		query += " AND (language IS NULL OR language = '')"
+	} else if lang != "" {
 		query += " AND language = ?"
 		args = append(args, lang)
 	}
@@ -221,7 +234,10 @@ func (s *SQLiteStore) UpsertLanguages(langs []model.Language) error {
 	return tx.Commit()
 }
 
-// GetLanguages 获取语言列表。
+// GetLanguages 获取语言列表（GitHub trending 页面爬虫快照）。
+//
+// 历史接口，**已不再驱动客户端 sidebar**——客户端用 `GetAggregatedLanguages()`。
+// 本表仍由 `syncLanguages` cron 任务定时刷新，保留供 debug / 未来扩展。
 func (s *SQLiteStore) GetLanguages() ([]model.Language, error) {
 	rows, err := s.db.Query("SELECT key, label FROM trending_languages ORDER BY label")
 	if err != nil {
@@ -238,6 +254,74 @@ func (s *SQLiteStore) GetLanguages() ([]model.Language, error) {
 		langs = append(langs, l)
 	}
 	return langs, rows.Err()
+}
+
+// GetAggregatedLanguages 基于 trending_repos 实际数据聚合语言列表。
+//
+// 实现要点：
+//  1. `COALESCE(NULLIF(language, ''), '__uncategorized__')` 把 NULL / 空串都归一到哨兵 key
+//  2. 仅统计 `is_available = 1 AND enriched_at IS NOT NULL`，与 GetRepos 可见性一致
+//  3. 排序：先按 `is_uncategorized ASC`（未分类排最后），再按 `cnt DESC`，最后按 key ASC 兜底稳定
+//  4. **不**按 since 维度切片——三个 period 合并；前端切 period 不需要重拉
+//
+// 关键约束（已踩过的坑）：
+//   - 不要直接 `GROUP BY language` 然后 if NULL 转 key——SQLite 在 GROUP BY 阶段就会把 NULL
+//     和 '' 分到两个 group 里（NULL 走默认 NULL 比较），需要 COALESCE 在 GROUP BY 之前归一
+//   - `NULLIF(language, '')` 把空串转 NULL，再 COALESCE 把所有 NULL 转哨兵——两步合一缺一不可
+//   - 不在 SQL 里写死哨兵字符串，从 Go 的 `model.UncategorizedLanguageKey` 注入，
+//     避免后端 const 改了 SQL 漏改
+func (s *SQLiteStore) GetAggregatedLanguages() ([]model.LanguageAggregate, error) {
+	// 把哨兵值通过参数注入，避免 SQL/Go 两边 const 漂移；
+	// 同时通过 `key = ?` 计算 `is_uncategorized` 标记，让排序「未分类排最后」与哨兵 key 解耦。
+	query := `
+		SELECT
+			COALESCE(NULLIF(language, ''), ?) AS key,
+			COUNT(*) AS cnt,
+			CASE WHEN COALESCE(NULLIF(language, ''), ?) = ? THEN 1 ELSE 0 END AS is_uncategorized
+		FROM trending_repos
+		WHERE is_available = 1 AND enriched_at IS NOT NULL
+		GROUP BY key
+		ORDER BY is_uncategorized ASC, cnt DESC, key ASC
+	`
+	rows, err := s.db.Query(query,
+		model.UncategorizedLanguageKey,
+		model.UncategorizedLanguageKey,
+		model.UncategorizedLanguageKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate languages: %w", err)
+	}
+	defer rows.Close()
+
+	// 显式初始化空切片（而不是 nil）：
+	// envelope 里 `Data []LanguageAggregate` 序列化时 nil 会输出 `null`，空切片输出 `[]`，
+	// 客户端解析时 `[]` 比 `null` 友好。
+	aggs := []model.LanguageAggregate{}
+	for rows.Next() {
+		var key string
+		var count int
+		var isUncategorized int
+		if err := rows.Scan(&key, &count, &isUncategorized); err != nil {
+			return nil, fmt.Errorf("scan aggregated language row: %w", err)
+		}
+
+		// label 默认 = key（GitHub 规范化的语言名直接展示）；
+		// 哨兵 key 给一个英文 label 做调试 / 非 i18n 客户端兜底，最终展示由客户端 i18n 决定。
+		label := key
+		if key == model.UncategorizedLanguageKey {
+			label = model.UncategorizedLanguageLabel
+		}
+
+		aggs = append(aggs, model.LanguageAggregate{
+			Key:   key,
+			Label: label,
+			Count: count,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate aggregated language rows: %w", err)
+	}
+	return aggs, nil
 }
 
 // Close 关闭数据库连接。

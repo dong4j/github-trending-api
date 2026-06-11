@@ -61,7 +61,45 @@ weekly-api `GET /api/v1/trending/zread`。
 
 ### `GET /api/v1/languages`（需鉴权）
 
-返回可用语言列表（24h 内存缓存）。
+返回**基于 `trending_repos` 表实时聚合**的语言列表（含 repo 数量），仅包含**当前真有 repo
+的语言** + 一项 `__uncategorized__`（语言为 NULL/空的 repo 集合）。
+
+> 历史 v1（2026-06-11 前）返回的是 GitHub trending 页面爬到的全量语言菜单（700+ 项，绝大多数
+> 在我们库里没数据），现已改为按实际数据聚合。响应字段在 `key` / `label` 上向后兼容，新增
+> `count` 字段。客户端 sidebar 直接用本接口驱动 trending 语言列表。
+
+响应示例：
+
+```json
+{
+  "schema_version": 1,
+  "data": [
+    { "key": "Python", "label": "Python", "count": 42 },
+    { "key": "Go", "label": "Go", "count": 31 },
+    { "key": "TypeScript", "label": "TypeScript", "count": 18 },
+    { "key": "__uncategorized__", "label": "Uncategorized", "count": 5 }
+  ],
+  "meta": {
+    "total": 4,
+    "generated_at": "2026-06-11T12:00:00Z",
+    "cache_status": "fresh"
+  }
+}
+```
+
+字段说明：
+
+- `key`：语言稳定标识（GitHub 规范化语言名，如 `Go` / `Python`）；
+  「未分类」恒为 `__uncategorized__`，可作为 `GET /api/v1/repos?lang=__uncategorized__` 查询参数
+- `label`：展示名（普通语言 = `key`；未分类 = `Uncategorized`，客户端可用自己的 i18n 覆盖）
+- `count`：该语言下当前 trending_repos 表中可用且已 enrich 的 repo 数量（三个 period 合并）
+
+排序规则：未分类**永远排在最后**，其它语言按 `count DESC` + `key ASC` 兜底稳定。
+
+#### `__uncategorized__` 哨兵在 `/api/v1/repos` 的语义
+
+`GET /api/v1/repos?lang=__uncategorized__` 等价于查询 `language IS NULL OR language = ''`，
+返回所有 GitHub 没识别到主语言的 trending repo（spider/enricher 都补不全的 case）。
 
 ### `GET /api/v1/users?lang=&since=&sponsorable=`（需鉴权）
 

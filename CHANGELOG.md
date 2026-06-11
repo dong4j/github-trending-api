@@ -7,6 +7,26 @@
 
 ## [Unreleased]
 
+### Changed
+- **`GET /api/v1/languages` 改造为基于 `trending_repos` 实际数据聚合**（2026-06-11 dong4j 反馈）。
+  - 历史实现：返回 `trending_languages` 表（GitHub trending 页面爬虫快照，700+ 全量语言菜单），
+    与实际是否有 repo 完全无关，客户端展示这个列表 90%+ 的语言下都没数据。
+  - 新实现：基于 `trending_repos` 表 `WHERE is_available = 1 AND enriched_at IS NOT NULL`
+    实时聚合，`GROUP BY language` 输出实际有 repo 的语言 + 每语言 `count`。
+  - **新增 `__uncategorized__` 哨兵项**：`language IS NULL OR language = ''` 的 repo 归到一桶，
+    label 为 `Uncategorized`（客户端可走 i18n 覆盖）。客户端可通过
+    `GET /api/v1/repos?lang=__uncategorized__` 拉这部分 repo。
+  - 排序：未分类**永远排在最后**，其它按 `count DESC, key ASC`。
+  - 响应字段兼容：`key` / `label` 保持 v1 语义；新增 `count` 字段，旧客户端忽略即可。
+  - 实现：
+    - `internal/model/trending.go`：新增 `LanguageAggregate{key,label,count}` + 哨兵常量
+    - `internal/store/store.go` + `sqlite.go`：新增 `GetAggregatedLanguages()`
+    - `internal/store/sqlite.go::GetRepos`：识别 `lang=__uncategorized__` 哨兵
+    - `internal/handler/languages.go`：handler 改用 `store.Store` 而非 `*scheduler.Scheduler`
+    - `cmd/server/main.go`：路由改注 `sqliteStore`
+  - 单测：`store_test.go` +4 case（聚合基本分组 / 空表 / 全是未分类 / GetRepos 哨兵）；
+    新增 `handler/languages_test.go` 3 case（fresh / cold / store 错误）。
+
 ### Added
 - **R-03 (2026-06-11)**：新增 `GET /api/v1/ping` 端点，专给 Starcat 客户端「测试连接」按钮用。
   - 走 BearerAuth 中间件，鉴权通过返回 200 + envelope `{data: {service: "trending", ok: true}}`；

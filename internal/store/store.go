@@ -58,11 +58,39 @@ type Store interface {
 
 	// --- Languages ---
 
-	// UpsertLanguages 批量 upsert 语言列表。
+	// UpsertLanguages 批量 upsert 语言列表（来自 GitHub trending 页面爬虫快照）。
+	//
+	// 注意：本方法写入的 `trending_languages` 表只是「GitHub 页面菜单上可选的全部语言名」，
+	// 与当前 `trending_repos` 实际有哪些 repo **完全无关**。客户端 sidebar 不再使用这张表，
+	// 改用 `GetAggregatedLanguages()`（基于 trending_repos 实际数据聚合）。
+	// 本表保留供 debug / 未来「未抓到的语言菜单」使用。
 	UpsertLanguages(langs []model.Language) error
 
-	// GetLanguages 获取语言列表。
+	// GetLanguages 获取语言列表（GitHub trending 页面爬虫快照，与实际数据无关）。
+	//
+	// 历史接口，**已不再驱动客户端 sidebar**。请使用 GetAggregatedLanguages()。
 	GetLanguages() ([]model.Language, error)
+
+	// GetAggregatedLanguages 基于 trending_repos 表聚合实际有数据的语言列表。
+	//
+	// 与 `GetLanguages()` 的区别：
+	//   - `GetLanguages()`：返回 trending_languages 表里 GitHub 页面的全部语言菜单（700+ 项），
+	//     **大部分语言下没有任何 repo**，客户端展示这个列表对用户无意义
+	//   - `GetAggregatedLanguages()`：返回 trending_repos 实际有 repo 的语言 + 每语言 repo 数量，
+	//     这才是 sidebar 真正需要的列表
+	//
+	// 数据策略（dong4j 2026-06-11 决策）：
+	//   - 三个 period（daily / weekly / monthly）合并聚合，不分维度。前端切 period 不需要重新拉，
+	//     避免「切到 weekly 发现某语言突然消失」的列表抖动
+	//   - 仅统计 `is_available = 1 AND enriched_at IS NOT NULL` 的行，
+	//     与 `GetRepos` 的可见性规则保持一致（客户端在 sidebar 看到的语言一定能在列表页查到 repo）
+	//   - `language IS NULL OR language = ''` 的 repo 归到 `model.UncategorizedLanguageKey`（哨兵值
+	//     `"__uncategorized__"`）一项；空表 / 无未分类时不出现该项
+	//   - 排序：未分类**永远排在最后**，其它语言按 count DESC，count 相同时按 key ASC（稳定输出）
+	//
+	// 永不返错——空结果直接返 `[]`，方便客户端 zero-state 处理。
+	// 真正的 DB 错误（连接断 / schema 异常）通过 error 返回，handler 层翻成 500。
+	GetAggregatedLanguages() ([]model.LanguageAggregate, error)
 
 	// Close 关闭数据库连接。
 	Close() error

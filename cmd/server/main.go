@@ -93,7 +93,10 @@ func main() {
 	// 在 middleware 后面挂——同时验证服务可达 + Bearer Key 正确。详见 handler/ping.go。
 	mux.Handle("GET /api/v1/ping", authMW.Wrap(handler.HandlePingV1("trending")))
 	mux.Handle("GET /api/v1/repos", authMW.Wrap(handler.HandleReposV1(sqliteStore)))
-	mux.Handle("GET /api/v1/languages", authMW.Wrap(handler.HandleLanguagesV1(sch)))
+	// /api/v1/languages 现在直接读 store 聚合（trending_repos 维度），不再走 scheduler 的
+	// langCache（langCache 抓的是 GitHub trending 页面菜单，与实际数据无关）。详见
+	// handler/languages.go 顶部的「历史演进」注释。
+	mux.Handle("GET /api/v1/languages", authMW.Wrap(handler.HandleLanguagesV1(sqliteStore)))
 	mux.Handle("GET /api/v1/users", authMW.Wrap(handler.HandleUsersV1()))
 	mux.Handle("POST /internal/sync/repos", authMW.Wrap(handler.HandleAdminSyncRepos(sch)))
 	mux.Handle("POST /internal/sync/languages", authMW.Wrap(handler.HandleAdminSyncLanguages(sch)))

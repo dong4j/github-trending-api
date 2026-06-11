@@ -29,14 +29,18 @@ import (
 	"github.com/dong4j/starcat-trending-api/internal/store"
 )
 
-// fakeStore 是 store.Store 的最小实现,只支持 GetRepos 的可观测调用。
+// fakeStore 是 store.Store 的最小实现,只支持 GetRepos / GetAggregatedLanguages 的可观测调用。
 type fakeStore struct {
-	repos        []model.TrendingRepo
-	gotSince     string
-	gotLang      string
-	gotLimit     int
-	callCount    int
-	forceGetErr  error
+	repos       []model.TrendingRepo
+	gotSince    string
+	gotLang     string
+	gotLimit    int
+	callCount   int
+	forceGetErr error
+
+	// GetAggregatedLanguages 用：fakeStore 本身就是 mock，按 fixture 直接返
+	aggregates        []model.LanguageAggregate
+	forceAggregateErr error
 }
 
 func (f *fakeStore) GetRepos(since, lang string, limit int) ([]model.TrendingRepo, error) {
@@ -74,6 +78,12 @@ func (f *fakeStore) UpsertLanguages(langs []model.Language) error {
 }
 func (f *fakeStore) GetLanguages() ([]model.Language, error) {
 	panic("GetLanguages not used in handler test")
+}
+func (f *fakeStore) GetAggregatedLanguages() ([]model.LanguageAggregate, error) {
+	if f.forceAggregateErr != nil {
+		return nil, f.forceAggregateErr
+	}
+	return f.aggregates, nil
 }
 func (f *fakeStore) Close() error { return nil }
 
