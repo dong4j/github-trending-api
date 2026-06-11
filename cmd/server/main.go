@@ -98,6 +98,11 @@ func main() {
 	mux.Handle("POST /internal/sync/repos", authMW.Wrap(handler.HandleAdminSyncRepos(sch)))
 	mux.Handle("POST /internal/sync/languages", authMW.Wrap(handler.HandleAdminSyncLanguages(sch)))
 	mux.Handle("POST /internal/sync/users", authMW.Wrap(handler.HandleAdminSyncUsers()))
+	// 2026-06-11 dong4j 反馈：trending 卡片缺 language / 详情字段。enricher
+	// 字段映射演进时（如 R-05 加 10 字段），老 enricher 处理过的历史行不会被
+	// 新版字段覆盖。此 endpoint 一键 reset enriched_at + 触发 EnrichAll 全表重
+	// 跑，省得手动删 trending.db。详见 handler.HandleEnrichForce 注释。
+	mux.Handle("POST /internal/enrich/force", authMW.Wrap(handler.HandleEnrichForce(sqliteStore, enc)))
 
 	// 优雅关闭
 	go func() {
@@ -120,9 +125,10 @@ func main() {
 	log.Printf("  GET  /api/v1/repos          - Trending repos (auth required)")
 	log.Printf("  GET  /api/v1/languages      - Languages list (auth required)")
 	log.Printf("  GET  /api/v1/users          - Trending developers (auth required)")
-	log.Printf("  POST /internal/sync/repos    - Manual sync trigger (auth required)")
+	log.Printf("  POST /internal/sync/repos    - Manual sync all periods (daily+weekly+monthly+languages) (auth required)")
 	log.Printf("  POST /internal/sync/languages - Languages refresh (auth required)")
 	log.Printf("  POST /internal/sync/users    - Developers refresh (auth required)")
+	log.Printf("  POST /internal/enrich/force  - Force re-enrich all data (clear enriched_at + dispatch EnrichAll) (auth required)")
 	log.Printf("  GET  /healthz               - Health check (public)")
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }

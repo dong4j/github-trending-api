@@ -63,9 +63,20 @@ func New(s store.Store, enc *enricher.Enricher, wn *notifier.WikiNotifier) *Sche
 }
 
 // Start 启动定时任务 + 冷启动全量同步。
+//
+// 历史 bug 修复（dong4j 2026-06-11 反馈）：之前冷启动只跑 syncDaily，
+// weekly / monthly 要等下一次 cron tick（最长 6h / 48h），导致服务启动后
+// 客户端 trending 页本周 / 本月 tab 长时间 0 条数据。现在三个 period 都
+// 异步触发，cold start 后端会几乎同时跑完三次 GitHub trending 抓取
+// （顺序：daily → weekly → monthly），用户切 tab 几分钟内就有数据。
+//
+// 每个 syncXxx 内部都自带 tryLock 互斥，跟后续 cron tick 重入冲突也会
+// 静默跳过，不会重复抓。
 func (sch *Scheduler) Start() {
-	log.Println("[scheduler] cold start: syncing daily + languages")
+	log.Println("[scheduler] cold start: syncing daily + weekly + monthly + languages")
 	go sch.syncDaily()
+	go sch.syncWeekly()
+	go sch.syncMonthly()
 	go sch.syncLanguages()
 	sch.cron.Start()
 	log.Println("[scheduler] cron started")
@@ -106,6 +117,17 @@ func (sch *Scheduler) syncDaily() {
 	sch.wikiNotifier.NotifyRepos(repos)
 }
 
+// syncWeekly / syncMonthly 历史 bug 修复（dong4j 2026-06-11 反馈）：
+// 这两个函数原本没调 `sch.enricher.EnrichAll()`，导致 weekly / monthly
+// 抓到的 repo 只有 spider 抓到的 stars / forks / change 等基础字段，
+// description / license_spdx / topics_json / watchers / language 全空，
+// 客户端 trending 卡片显示不全。现在与 syncDaily 行为一致：抓完 →
+// 重算 priority → enricher 跑一遍 GitHub API 补全 → 通知 wiki 预热。
+//
+// 注：EnrichAll 内部 GetUnenrichedRepos 只取 enriched_at IS NULL 的行，
+// 已经 enriched 的不会被重 enrich，所以三个 period 共用一个 enricher
+// 池子不会冲突 / 重复消耗 token。
+
 func (sch *Scheduler) syncWeekly() {
 	if !sch.tryLock("weekly") {
 		return
@@ -115,6 +137,7 @@ func (sch *Scheduler) syncWeekly() {
 	log.Println("[scheduler] syncing weekly trending")
 	repos := sch.scrapeAndPersist("", "weekly")
 	_ = sch.store.RecomputePriorities("weekly")
+	sch.enricher.EnrichAll()
 	sch.wikiNotifier.NotifyRepos(repos)
 }
 
@@ -127,6 +150,7 @@ func (sch *Scheduler) syncMonthly() {
 	log.Println("[scheduler] syncing monthly trending")
 	repos := sch.scrapeAndPersist("", "monthly")
 	_ = sch.store.RecomputePriorities("monthly")
+	sch.enricher.EnrichAll()
 	sch.wikiNotifier.NotifyRepos(repos)
 }
 

@@ -66,6 +66,9 @@ func (f *fakeStore) MarkUnavailable(fullName, since string) error {
 func (f *fakeStore) RecomputePriorities(since string) error {
 	panic("RecomputePriorities not used in handler test")
 }
+func (f *fakeStore) ResetAllEnriched() error {
+	panic("ResetAllEnriched not used in handler test")
+}
 func (f *fakeStore) UpsertLanguages(langs []model.Language) error {
 	panic("UpsertLanguages not used in handler test")
 }

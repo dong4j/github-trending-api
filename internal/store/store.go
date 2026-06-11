@@ -39,6 +39,23 @@ type Store interface {
 	// R-02 v2.1：删除 source 参数，固定走全表 since 维度。
 	RecomputePriorities(since string) error
 
+	// ResetAllEnriched 把所有 repo 的 enriched_at 置为 NULL，让下一次
+	// `enricher.EnrichAll()` 把全表当成"未 enrich"状态重新跑一遍 GitHub API。
+	//
+	// 设计动机（dong4j 2026-06-11）：
+	// enricher 字段映射 / GitHub API 返回字段集会随版本演进（如 R-05 加 10 个
+	// 详情字段），但 EnrichAll 流程是「只补 enriched_at IS NULL 的行」—— 已经
+	// 用老版 enricher 处理过的历史数据**永远不会被新版字段覆盖**，新加字段会
+	// 长期为空。这个方法配合 HandleEnrichForce admin endpoint 提供「一键全表重
+	// enrich」能力，省得每次升级 enricher 字段都要手动删 trending.db。
+	//
+	// 关键约束：
+	//   - 只清 enriched_at，不动 spider 抓的 stars / forks / change / language 等
+	//     基础字段，避免在重 enrich 间隙客户端看到空卡片
+	//   - 不重置 enrich_priority，让 enricher 仍按现有优先级倒序处理
+	//   - 调用方需注意：会让所有行重新进入 enricher 队列，token 消耗 = 全表行数 × 1 req
+	ResetAllEnriched() error
+
 	// --- Languages ---
 
 	// UpsertLanguages 批量 upsert 语言列表。

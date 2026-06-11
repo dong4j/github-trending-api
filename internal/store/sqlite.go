@@ -142,6 +142,16 @@ func (s *SQLiteStore) UpdateEnriched(fullName, since string, repo model.Trending
 	return err
 }
 
+// ResetAllEnriched 把所有 repo 的 enriched_at 置 NULL，让 enricher 把全表
+// 当成"未 enrich"状态重跑（详见 Store 接口注释）。
+//
+// 注意：不动 stars / forks / change / language 等 spider 字段，也不动
+// enrich_priority，避免重 enrich 间隙客户端看到空卡片。
+func (s *SQLiteStore) ResetAllEnriched() error {
+	_, err := s.db.Exec(`UPDATE trending_repos SET enriched_at = NULL`)
+	return err
+}
+
 // MarkUnavailable 标记 repo 404。
 func (s *SQLiteStore) MarkUnavailable(fullName, since string) error {
 	_, err := s.db.Exec(`UPDATE trending_repos SET is_available = 0 WHERE full_name = ? AND since = ?`,
