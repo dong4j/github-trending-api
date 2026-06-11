@@ -20,6 +20,7 @@ import (
 	"github.com/dong4j/starcat-trending-api/internal/enricher"
 	"github.com/dong4j/starcat-trending-api/internal/handler"
 	"github.com/dong4j/starcat-trending-api/internal/middleware"
+	"github.com/dong4j/starcat-trending-api/internal/notifier"
 	"github.com/dong4j/starcat-trending-api/internal/scheduler"
 	"github.com/dong4j/starcat-trending-api/internal/store"
 	"github.com/dong4j/starcat-trending-api/internal/tokenpool"
@@ -76,8 +77,11 @@ func main() {
 	enrichQueue.Start()
 	defer enrichQueue.Stop()
 
+	// Wiki Notifier（增量预热 wiki-api 缓存，通过 WIKI_API_KEY 控制开关）
+	wikiNotifier := notifier.NewWikiNotifier()
+
 	// Scheduler
-	sch := scheduler.New(sqliteStore, enc)
+	sch := scheduler.New(sqliteStore, enc, wikiNotifier)
 
 	// Bearer 鉴权中间件
 	authMW := middleware.NewBearerAuth(apiKeys)

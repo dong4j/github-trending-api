@@ -14,18 +14,20 @@ import (
 
 	"github.com/dong4j/starcat-trending-api/internal/enricher"
 	"github.com/dong4j/starcat-trending-api/internal/model"
+	"github.com/dong4j/starcat-trending-api/internal/notifier"
 	"github.com/dong4j/starcat-trending-api/internal/spider"
 	"github.com/dong4j/starcat-trending-api/internal/store"
 )
 
 // Scheduler 管理定时爬虫任务。
 type Scheduler struct {
-	store     store.Store
-	enricher  *enricher.Enricher
-	cron      *cron.Cron
-	langCache *languageCache
-	mu        sync.Mutex
-	running   map[string]bool // 防止并发跑同一任务
+	store        store.Store
+	enricher     *enricher.Enricher
+	wikiNotifier *notifier.WikiNotifier
+	cron         *cron.Cron
+	langCache    *languageCache
+	mu           sync.Mutex
+	running      map[string]bool // 防止并发跑同一任务
 }
 
 // languageCache 语言列表内存缓存（24h TTL）。
@@ -36,13 +38,14 @@ type languageCache struct {
 }
 
 // New 创建 Scheduler。
-func New(s store.Store, enc *enricher.Enricher) *Scheduler {
+func New(s store.Store, enc *enricher.Enricher, wn *notifier.WikiNotifier) *Scheduler {
 	sch := &Scheduler{
-		store:     s,
-		enricher:  enc,
-		cron:      cron.New(cron.WithSeconds()),
-		langCache: &languageCache{},
-		running:   make(map[string]bool),
+		store:        s,
+		enricher:     enc,
+		wikiNotifier: wn,
+		cron:         cron.New(cron.WithSeconds()),
+		langCache:    &languageCache{},
+		running:      make(map[string]bool),
 	}
 
 	// daily 每小时第 7 分
@@ -97,9 +100,10 @@ func (sch *Scheduler) syncDaily() {
 	defer sch.unlock("daily")
 
 	log.Println("[scheduler] syncing daily trending")
-	sch.scrapeAndPersist("", "daily")
+	repos := sch.scrapeAndPersist("", "daily")
 	_ = sch.store.RecomputePriorities("daily")
 	sch.enricher.EnrichAll()
+	sch.wikiNotifier.NotifyRepos(repos)
 }
 
 func (sch *Scheduler) syncWeekly() {
@@ -109,8 +113,9 @@ func (sch *Scheduler) syncWeekly() {
 	defer sch.unlock("weekly")
 
 	log.Println("[scheduler] syncing weekly trending")
-	sch.scrapeAndPersist("", "weekly")
+	repos := sch.scrapeAndPersist("", "weekly")
 	_ = sch.store.RecomputePriorities("weekly")
+	sch.wikiNotifier.NotifyRepos(repos)
 }
 
 func (sch *Scheduler) syncMonthly() {
@@ -120,8 +125,9 @@ func (sch *Scheduler) syncMonthly() {
 	defer sch.unlock("monthly")
 
 	log.Println("[scheduler] syncing monthly trending")
-	sch.scrapeAndPersist("", "monthly")
+	repos := sch.scrapeAndPersist("", "monthly")
 	_ = sch.store.RecomputePriorities("monthly")
+	sch.wikiNotifier.NotifyRepos(repos)
 }
 
 func (sch *Scheduler) enrichLongTail() {
@@ -134,9 +140,12 @@ func (sch *Scheduler) cleanupStale() {
 }
 
 // scrapeAndPersist 爬所有语言 × since 组合并落库。
-func (sch *Scheduler) scrapeAndPersist(lang, since string) {
+// 返回本次持久化的 owner/repo 列表，用于后续 wiki 预热。
+func (sch *Scheduler) scrapeAndPersist(lang, since string) []string {
 	sp := spider.NewRepoSpider(since, lang)
 	items := sp.GetItems()
+
+	var repos []string
 
 	for _, item := range items {
 		parts := strings.SplitN(item.Repo, "/", 2)
@@ -152,8 +161,9 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) {
 			bjJSON = &s
 		}
 
+		fullName := owner + "/" + name
 		rec := model.TrendingRepo{
-			FullName:    owner + "/" + name,
+			FullName:    fullName,
 			Owner:       owner,
 			Name:        name,
 			DescText:    &item.Desc,
@@ -169,10 +179,14 @@ func (sch *Scheduler) scrapeAndPersist(lang, since string) {
 
 		if err := sch.store.UpsertRepo(rec); err != nil {
 			log.Printf("[scheduler] upsert %s failed: %v", rec.FullName, err)
+			continue
 		}
+
+		repos = append(repos, fullName)
 	}
 
 	log.Printf("[scheduler] scraped %d repos for since=%s lang=%s", len(items), since, lang)
+	return repos
 }
 
 // syncLanguages 刷新语言列表缓存。
